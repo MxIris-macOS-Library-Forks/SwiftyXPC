@@ -209,7 +209,7 @@ public final class XPCListener {
         case .xpcMain:
             Self.xpcMainListenerStorage.xpcMainListener = self
         case .connection(let connection, _):
-            connection.customEventHandler = { [weak self] in
+            connection.customEventHandler = { [weak self, weak connection] in
                 do {
                     guard case .connection = $0.type else {
                         preconditionFailure("XPCListener is required to have connection backing when run as a Mach service")
@@ -222,7 +222,9 @@ public final class XPCListener {
 
                     newConnection.activate()
                 } catch {
-                    self?.errorHandler?(connection, error)
+                    if let connection {
+                        self?.errorHandler?(connection, error)
+                    }
                 }
             }
         }
