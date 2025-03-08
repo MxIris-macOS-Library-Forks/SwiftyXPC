@@ -295,7 +295,7 @@ public class XPCConnection: @unchecked Sendable {
     /// - Returns: The value returned by the receiving connection's helper function.
     ///
     /// - Throws: Throws an error if the receiving connection throws an error in its handler, or if a communication error occurs.
-    public func sendMessage<Response: Codable>(name: String) async throws -> Response {
+    public func sendMessage<Response: Codable & Sendable>(name: String) async throws -> Response {
         try await self.sendMessage(name: name, request: XPCNull.shared)
     }
 
@@ -309,7 +309,7 @@ public class XPCConnection: @unchecked Sendable {
     ///
     /// - Throws: Throws an error the `request` parameter does not match the type specified by the receiving connection’s handler function,
     ///   if the receiving connection throws an error in its handler, or if a communication error occurs.
-    public func sendMessage<Request: Codable, Response: Codable>(name: String, request: Request) async throws -> Response {
+    public func sendMessage<Response: Codable & Sendable>(name: String, request: some Codable) async throws -> Response {
         let body = try XPCEncoder().encode(request)
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -334,11 +334,13 @@ public class XPCConnection: @unchecked Sendable {
                         throw Error.missingMessageBody
                     }
 
-                    if Response.self == XPCNull.self {
-                        continuation.resume(returning: XPCNull() as! Response)
+                    let response: Response = if Response.self == XPCNull.self {
+                        XPCNull() as! Response
                     } else {
-                        continuation.resume(returning: try XPCDecoder().decode(type: Response.self, from: body))
+                        try XPCDecoder().decode(type: Response.self, from: body)
                     }
+
+                    continuation.resume(returning: response)
                 } catch {
                     continuation.resume(throwing: error)
                 }

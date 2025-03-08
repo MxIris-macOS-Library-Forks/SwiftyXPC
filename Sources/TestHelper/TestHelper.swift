@@ -12,7 +12,7 @@ import TestShared
 
 @main
 @available(macOS 13.0, *)
-class XPCService {
+final class XPCService: Sendable {
     static func main() {
         do {
             let xpcService = XPCService()

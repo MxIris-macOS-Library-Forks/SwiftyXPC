@@ -5,6 +5,7 @@
 //  Created by Charles Srstka on 12/19/21.
 //
 
+import Synchronization
 import XPC
 
 /// A registry which facilitates decoding error types that are sent over an XPC connection.
@@ -42,14 +43,46 @@ import XPC
 ///     } catch {
 ///         print("got some other error")
 ///     }
-public class XPCErrorRegistry {
+public final class XPCErrorRegistry: Sendable {
     /// The shared `XPCErrorRegistry` instance.
     public static let shared = XPCErrorRegistry()
 
-    private var errorDomainMap: [String: (Error & Codable).Type] = [
-        String(reflecting: XPCError.self): XPCError.self,
-        String(reflecting: XPCConnection.Error.self): XPCConnection.Error.self,
-    ]
+    @available(macOS 15.0, macCatalyst 18.0, *)
+    private final class MutexWrapper: Sendable {
+        let mutex: Mutex<[String: (Error & Codable).Type]>
+        init(dict: [String: (Error & Codable).Type]) { self.mutex = Mutex(dict) }
+    }
+
+    private final class LegacyWrapper: @unchecked Sendable {
+        let sema = DispatchSemaphore(value: 1)
+        var dict: [String: (Error & Codable).Type]
+        init(dict: [String: (Error & Codable).Type]) { self.dict = dict }
+    }
+
+    private let errorDomainMapWrapper: any Sendable = {
+        let errorDomainMap: [String: (Error & Codable).Type] = [
+            String(reflecting: XPCError.self): XPCError.self,
+            String(reflecting: XPCConnection.Error.self): XPCConnection.Error.self,
+        ]
+
+        if #available(macOS 15.0, macCatalyst 18.0, *) {
+            return MutexWrapper(dict: errorDomainMap)
+        } else {
+            return LegacyWrapper(dict: errorDomainMap)
+        }
+    }()
+
+    private func withLock<T>(closure: (inout [String: (Error & Codable).Type]) throws -> T) rethrows -> T {
+        if #available(macOS 15.0, macCatalyst 18.0, *) {
+            return try (self.errorDomainMapWrapper as! MutexWrapper).mutex.withLock { try closure(&$0) }
+        } else {
+            let wrapper = self.errorDomainMapWrapper as! LegacyWrapper
+            wrapper.sema.wait()
+            defer { wrapper.sema.signal() }
+
+            return try closure(&wrapper.dict)
+        }
+    }
 
     /// Register an error type.
     ///
@@ -57,17 +90,23 @@ public class XPCErrorRegistry {
     ///   - domain: An `NSError`-style domain string to associate with this error type. In most cases, you will just pass `nil` for this parameter, in which case the default value of `String(reflecting: errorType)` will be used instead.
     ///   - errorType: An error type to register. This type must conform to `Codable`.
     public func registerDomain(_ domain: String? = nil, forErrorType errorType: (Error & Codable).Type) {
-        errorDomainMap[domain ?? String(reflecting: errorType)] = errorType
+        self.withLock { $0[domain ?? String(reflecting: errorType)] = errorType }
     }
 
     internal func encodeError(_ error: Error, domain: String? = nil) throws -> xpc_object_t {
-        try XPCEncoder().encode(BoxedError(error: error, domain: domain))
+        try self.withLock { _ in
+            try XPCEncoder().encode(BoxedError(error: error, domain: domain))
+        }
     }
 
     internal func decodeError(_ error: xpc_object_t) throws -> Error {
         let boxedError = try XPCDecoder().decode(type: BoxedError.self, from: error)
 
         return boxedError.encodedError ?? boxedError
+    }
+
+    internal func errorType(forDomain domain: String) -> (any (Error & Codable).Type)? {
+        self.withLock { $0[domain] }
     }
 
     /// An error type representing errors for which we have an `NSError`-style domain and code, but do not know the exact error class.
@@ -155,7 +194,7 @@ public class XPCErrorRegistry {
             self.errorDomain = try container.decode(String.self, forKey: .domain)
             let code = try container.decode(Int.self, forKey: .code)
 
-            if let codableType = XPCErrorRegistry.shared.errorDomainMap[self.errorDomain],
+            if let codableType = XPCErrorRegistry.shared.errorType(forDomain: self.errorDomain),
                 let codableError = try codableType.decodeIfPresent(from: container, key: .encodedError)
             {
                 self.storage = .codable(codableError)

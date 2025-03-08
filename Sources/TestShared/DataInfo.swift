@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct DataInfo: Codable {
+public struct DataInfo: Codable, Sendable {
     public struct DataError: LocalizedError, Codable {
         public let failureReason: String?
         public init(failureReason: String) { self.failureReason = failureReason }

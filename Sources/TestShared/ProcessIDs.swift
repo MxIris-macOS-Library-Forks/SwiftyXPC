@@ -10,7 +10,7 @@ import SwiftyXPC
 import System
 
 // swift-format-ignore: AllPublicDeclarationsHaveDocumentation
-public struct ProcessIDs: Codable {
+public struct ProcessIDs: Codable, Sendable {
     public let pid: pid_t
     public let effectiveUID: uid_t
     public let effectiveGID: gid_t
