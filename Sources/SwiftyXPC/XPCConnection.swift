@@ -1,6 +1,17 @@
+import Darwin
 import Security
 import System
 import XPC
+
+// `xpc_connection_get_audit_token` is a stable but unpublished SPI exported from libSystem
+// since macOS 10.8. Re-declared here so callers can validate peer connections against a
+// `SecRequirement` using the audit token, which avoids the TOCTOU window inherent to
+// PID-based lookups via `SecCodeCopyGuestWithAttributes(kSecGuestAttributePid:)`.
+@_silgen_name("xpc_connection_get_audit_token")
+private func swiftyxpc_xpc_connection_get_audit_token(
+    _ connection: xpc_connection_t,
+    _ token: UnsafeMutablePointer<audit_token_t>
+)
 
 /// A bidirectional communication channel between two processes.
 ///
@@ -227,6 +238,23 @@ public class XPCConnection: @unchecked Sendable {
     /// The process ID of the remote process.
     public var processIdentifier: pid_t {
         xpc_connection_get_pid(self.connection)
+    }
+
+    /// The audit token of the remote process.
+    ///
+    /// The audit token uniquely identifies a peer process and is suitable for use with
+    /// `SecCodeCopyGuestWithAttributes` (using `kSecGuestAttributeAudit`) to obtain a
+    /// `SecCode` reference that can be validated against a `SecRequirement`.
+    ///
+    /// Prefer this over `processIdentifier` when performing code-signing checks: a PID
+    /// can be reused after the original peer exits, leaving a TOCTOU window in which a
+    /// different process could be inspected. The audit token does not have this issue.
+    public var auditToken: audit_token_t {
+        var token = audit_token_t(val: (0, 0, 0, 0, 0, 0, 0, 0))
+        withUnsafeMutablePointer(to: &token) { tokenPointer in
+            swiftyxpc_xpc_connection_get_audit_token(self.connection, tokenPointer)
+        }
+        return token
     }
 
     /// Activate the connection.
