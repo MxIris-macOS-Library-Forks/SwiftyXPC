@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCNull.swift
 //
@@ -10,3 +11,4 @@ public struct XPCNull: Codable, Sendable {
     /// The shared `XPCNull` instance.
     public static let shared = Self()
 }
+#endif

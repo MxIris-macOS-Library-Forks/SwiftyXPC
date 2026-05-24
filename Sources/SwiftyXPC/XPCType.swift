@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCType.swift
 //
@@ -114,3 +115,4 @@ extension xpc_object_t {
     /// The type of a raw `xpc_object_t`, represented as an `XPCType`.
     var type: XPCType { XPCType(rawType: xpc_get_type(self)) }
 }
+#endif

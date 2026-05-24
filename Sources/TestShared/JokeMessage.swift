@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  JokeMessage.swift
 //
@@ -18,3 +19,4 @@ public struct JokeMessage {
     public static let who = "who"
     public static let groan = "groan"
 }
+#endif

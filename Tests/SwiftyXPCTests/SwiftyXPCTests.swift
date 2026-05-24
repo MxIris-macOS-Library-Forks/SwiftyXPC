@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 import XCTest
 
 @testable import SwiftyXPC
@@ -233,3 +234,4 @@ final class SwiftyXPCTests: XCTestCase {
         return conn
     }
 }
+#endif

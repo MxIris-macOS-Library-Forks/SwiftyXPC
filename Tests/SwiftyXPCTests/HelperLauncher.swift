@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  HelperLauncher.swift
 //
@@ -87,3 +88,4 @@ class HelperLauncher {
         return string! as String
     }
 }
+#endif

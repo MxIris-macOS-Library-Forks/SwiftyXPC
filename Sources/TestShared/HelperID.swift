@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  HelperID.swift
 //
@@ -7,3 +8,4 @@
 
 // swift-format-ignore: AllPublicDeclarationsHaveDocumentation
 public let helperID = "com.charlessoft.SwiftyXPC.TestHelper"
+#endif

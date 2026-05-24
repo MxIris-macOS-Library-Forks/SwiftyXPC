@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCErrorRegistry.swift
 //
@@ -239,3 +240,4 @@ extension Error where Self: Codable {
         try keyedContainer.encode(self, forKey: key)
     }
 }
+#endif

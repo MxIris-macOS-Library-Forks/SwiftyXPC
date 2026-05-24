@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  String+SwiftyXPC.swift
 //  SwiftyXPC
@@ -25,3 +26,4 @@ extension String {
     /// - Returns: An `xpc_object_t` wrapping the receiver's string.
     public func toXPCObject() -> xpc_object_t? { xpc_string_create(self) }
 }
+#endif

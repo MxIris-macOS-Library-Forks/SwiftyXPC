@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCEndpoint.swift
 //  SwiftyXPC
@@ -48,3 +49,4 @@ public struct XPCEndpoint: Codable, @unchecked Sendable {
         throw CanOnlyBeEncodedByXPCEncoder()
     }
 }
+#endif

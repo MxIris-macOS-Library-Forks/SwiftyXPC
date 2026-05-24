@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCFileDescriptorWrapper.swift
 //  SwiftyXPC
@@ -30,7 +31,7 @@ public final class XPCFileDescriptor: Codable {
 
     /// Create an `XPCFileDescriptor` from a `FileDescriptor` and take the ownership of it.
     /// The file descriptor will be closed automatically when this instance is deinitialized.
-    @available(macOS 11.0, *)
+    @available(macOS 11.0, macCatalyst 14.0, *)
     public init(fileDescriptor: FileDescriptor) {
         self.fileDescriptor = fileDescriptor.rawValue
     }
@@ -40,7 +41,7 @@ public final class XPCFileDescriptor: Codable {
         let fd = Darwin.dup(fileDescriptor)
 
         if fd < 0 {
-            if #available(macOS 11.0, *) {
+            if #available(macOS 11.0, macCatalyst 14.0, *) {
                 throw Errno(rawValue: errno)
             } else {
                 throw XPCErrorRegistry.BoxedError(domain: "NSPOSIXErrorDomain", code: Int(errno))
@@ -51,9 +52,9 @@ public final class XPCFileDescriptor: Codable {
     }
 
     /// Duplicate the file descriptor. The caller is responsible for closing the returned `FileDescriptor`.
-    @available(macOS 11.0, *)
+    @available(macOS 11.0, macCatalyst 14.0, *)
     public func duplicate() throws -> FileDescriptor {
-        if #available(macOS 12.0, *) {
+        if #available(macOS 12.0, macCatalyst 15.0, *) {
             return try FileDescriptor(rawValue: self.fileDescriptor).duplicate()
         } else {
             return try FileDescriptor(rawValue: self.dup())
@@ -64,3 +65,4 @@ public final class XPCFileDescriptor: Codable {
         close(self.fileDescriptor)
     }
 }
+#endif

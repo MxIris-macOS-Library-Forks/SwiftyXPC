@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  TestHelper.swift
 //
@@ -11,7 +12,7 @@ import SwiftyXPC
 import TestShared
 
 @main
-@available(macOS 13.0, *)
+@available(macOS 13.0, macCatalyst 16.0, *)
 final class XPCService: Sendable {
     static func main() {
         do {
@@ -64,7 +65,7 @@ final class XPCService: Sendable {
         )
     }
 
-    private func tellAJoke(_: XPCConnection, endpoint: XPCEndpoint) async throws {
+    private func tellAJoke(_: XPCConnection, endpoint: SwiftyXPC.XPCEndpoint) async throws {
         let remoteConnection = try XPCConnection(
             type: .remoteServiceFromEndpoint(endpoint),
             codeSigningRequirement: nil
@@ -89,3 +90,4 @@ final class XPCService: Sendable {
         try await Task.sleep(for: .seconds(1))
     }
 }
+#endif

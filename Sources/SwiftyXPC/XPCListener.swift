@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  XPCListener.swift
 //  SwiftyXPC
@@ -304,3 +305,4 @@ public final class XPCListener {
         }
     }
 }
+#endif

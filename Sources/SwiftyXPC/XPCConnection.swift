@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 import Darwin
 import Security
 import System
@@ -123,7 +124,7 @@ public class XPCConnection: @unchecked Sendable {
         self.connection = connection
         self.codeSigningRequirement = codeSigningRequirement
 
-        if #available(macOS 12.0, *), let requirement = codeSigningRequirement {
+        if #available(macOS 12.0, macCatalyst 15.0, *), let requirement = codeSigningRequirement {
             guard xpc_connection_set_peer_code_signing_requirement(self.connection, requirement) == 0 else {
                 throw XPCError.invalidCodeSignatureRequirement
             }
@@ -220,10 +221,12 @@ public class XPCConnection: @unchecked Sendable {
         self.messageHandlers[name] = MessageHandler(closure: handler)
     }
 
+    #if os(macOS)
     /// The audit session identifier associated with the remote process.
     public var auditSessionIdentifier: au_asid_t {
         xpc_connection_get_asid(self.connection)
     }
+    #endif
 
     /// The effective group identifier associated with the remote process.
     public var effectiveGroupIdentifier: gid_t {
@@ -235,10 +238,12 @@ public class XPCConnection: @unchecked Sendable {
         xpc_connection_get_euid(self.connection)
     }
 
+    #if os(macOS)
     /// The process ID of the remote process.
     public var processIdentifier: pid_t {
         xpc_connection_get_pid(self.connection)
     }
+    #endif
 
     /// The audit token of the remote process.
     ///
@@ -450,15 +455,17 @@ public class XPCConnection: @unchecked Sendable {
     }
 
     private func handleEvent(_ event: xpc_object_t) {
-        if #available(macOS 12.0, *) {
+        if #available(macOS 12.0, macCatalyst 15.0, *) {
             // On Monterey and later, we are relying on xpc's built-in functionality for checking code signatures instead
         } else {
+            #if os(macOS)
             do {
                 try self.checkCallerCredentials(event: event)
             } catch {
                 self.errorHandler?(self, error)
                 return
             }
+            #endif
         }
 
         if let customEventHandler = self.customEventHandler {
@@ -484,7 +491,7 @@ public class XPCConnection: @unchecked Sendable {
             return
         }
     }
-
+    #if os(macOS)
     @available(macOS, obsoleted: 12.0)
     private func checkCallerCredentials(event: xpc_object_t) throws {
         guard let requirementString = self.codeSigningRequirement else { return }
@@ -492,7 +499,7 @@ public class XPCConnection: @unchecked Sendable {
         var code: SecCode? = nil
         var err: OSStatus
 
-        if #available(macOS 11.0, *) {
+        if #available(macOS 11.0, macCatalyst 14.0, *) {
             err = SecCodeCreateWithXPCMessage(event, [], &code)
         } else {
             var keyCB = kCFTypeDictionaryKeyCallBacks
@@ -530,6 +537,7 @@ public class XPCConnection: @unchecked Sendable {
             throw Error.callerFailedCredentialCheck(err)
         }
     }
+    #endif
 
     private func respond(to event: xpc_object_t) {
         struct SendableWrapper: @unchecked Sendable {
@@ -580,3 +588,4 @@ public class XPCConnection: @unchecked Sendable {
         try self.sendOnewayMessage(name: name, message: message)
     }
 }
+#endif

@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  ProcessIDs.swift
 //
@@ -14,12 +15,17 @@ public struct ProcessIDs: Codable, Sendable {
     public let pid: pid_t
     public let effectiveUID: uid_t
     public let effectiveGID: gid_t
+    #if os(macOS)
     public let auditSessionID: au_asid_t
+    #endif
 
     public init(connection: XPCConnection) throws {
         self.pid = getpid()
         self.effectiveUID = geteuid()
         self.effectiveGID = getegid()
+        #if os(macOS)
         self.auditSessionID = connection.auditSessionIdentifier
+        #endif
     }
 }
+#endif

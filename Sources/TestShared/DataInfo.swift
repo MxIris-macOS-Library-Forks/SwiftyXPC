@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  DataInfo.swift
 //
@@ -23,3 +24,4 @@ public struct DataInfo: Codable, Sendable {
     public let playedBy: Data
     public let otherCharacters: [Data]
 }
+#endif

@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 //
 //  CommandSet.swift
 //  Example XPC Service
@@ -14,3 +15,4 @@ public struct CommandSet {
     public static let tellAJoke = "com.charlessoft.SwiftyXPC.Tests.TellAJoke"
     public static let pauseOneSecond = "com.charlessoft.SwiftyXPC.Tests.PauseOneSecond"
 }
+#endif

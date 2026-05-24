@@ -1,3 +1,4 @@
+#if os(macOS) || targetEnvironment(macCatalyst)
 import XPC
 
 /// An XPC-related communication error.
@@ -69,3 +70,4 @@ public enum XPCError: Error, Codable, Sendable {
         }
     }
 }
+#endif
