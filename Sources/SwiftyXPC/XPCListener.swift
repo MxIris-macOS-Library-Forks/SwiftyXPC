@@ -210,13 +210,24 @@ public final class XPCListener {
         case .xpcMain:
             Self.xpcMainListenerStorage.xpcMainListener = self
         case .connection(let connection, _):
-            connection.customEventHandler = { [weak self, weak connection] in
-                do {
-                    guard case .connection = $0.type else {
-                        preconditionFailure("XPCListener is required to have connection backing when run as a Mach service")
+            connection.customEventHandler = { [weak self, weak connection] event in
+                // A listener connection delivers two kinds of events: a brand-new
+                // peer connection to accept, or an error object (for example
+                // XPC_ERROR_CONNECTION_INVALID when the listener itself is
+                // cancelled, or XPC_ERROR_TERMINATION_IMMINENT during shutdown).
+                // Only genuine peer connections may be turned into an XPCConnection;
+                // every other event is a listener-level condition that must be
+                // surfaced through `errorHandler`. Trapping here would escalate a
+                // routine listener teardown into a process-wide abort.
+                guard case .connection = event.type else {
+                    if let connection {
+                        self?.errorHandler?(connection, XPCError(error: event))
                     }
+                    return
+                }
 
-                    let newConnection = try XPCConnection(connection: $0, codeSigningRequirement: requirement)
+                do {
+                    let newConnection = try XPCConnection(connection: event, codeSigningRequirement: requirement)
 
                     newConnection.messageHandlers = self?.messageHandlers ?? [:]
                     newConnection.errorHandler = self?.errorHandler
