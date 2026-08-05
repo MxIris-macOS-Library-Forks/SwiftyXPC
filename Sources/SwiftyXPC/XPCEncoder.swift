@@ -23,6 +23,20 @@ extension XPCEncodingContainer {
     fileprivate func encodeString(_ string: String) -> xpc_object_t { xpc_string_create(string) }
 
     fileprivate func finalize() {}
+
+    /// Finalizes this container and everything encoded beneath it.
+    ///
+    /// Containers form a tree: `nestedContainer(keyedBy:forKey:)` and `nestedUnkeyedContainer(forKey:)`
+    /// add to `childContainers`, while encoding an arbitrary `Encodable` adds to `childEncoders`.
+    /// Only `UnkeyedContainer` does real work in `finalize()` — writing its accumulated elements under
+    /// the `Contents` key — but it can sit at any depth, so the entire tree has to be visited.
+    /// Descending only one level leaves deeper unkeyed containers without their `Contents` key, and
+    /// `XPCDecoder` then rejects the message with "Missing contents for unkeyed container".
+    fileprivate func finalizeRecursively() {
+        self.finalize()
+        self.childContainers.forEach { $0.finalizeRecursively() }
+        self.childEncoders.forEach { $0.finalize() }
+    }
 }
 
 /// An implementation of `Encoder` that can encode values to be sent over an XPC connection.
@@ -525,11 +539,7 @@ public class XPCEncoder {
         }
 
         func finalize() {
-            if let container = self.topLevelContainer {
-                container.finalize()
-                container.childContainers.forEach { $0.finalize() }
-                container.childEncoders.forEach { $0.finalize() }
-            }
+            self.topLevelContainer?.finalizeRecursively()
         }
     }
 
