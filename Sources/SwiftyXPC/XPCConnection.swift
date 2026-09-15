@@ -80,7 +80,9 @@ public class XPCConnection: @unchecked Sendable {
 
     private let connection: xpc_connection_t
 
-    @available(macOS, obsoleted: 12.0)
+    // Deliberately not marked `@available(macOS, obsoleted: 12.0)`. At a macOS 12 or later
+    // deployment target the property would be unavailable across the whole supported range, and a
+    // stored property cannot be marked unavailable — it contributes to the type's layout either way.
     private let codeSigningRequirement: String?
 
     internal static func makeAnonymousListenerConnection(codeSigningRequirement: String?) throws -> XPCConnection {
@@ -492,7 +494,10 @@ public class XPCConnection: @unchecked Sendable {
         }
     }
     #if os(macOS)
-    @available(macOS, obsoleted: 12.0)
+    // Deliberately not marked `@available(macOS, obsoleted: 12.0)`, for the same reason as
+    // `codeSigningRequirement` above: the `#available(macOS 12.0, ...)` else-branch that calls this
+    // is still checked against the deployment target, so at macOS 12 or later the call would not
+    // compile. The branch remains unreachable there; only the availability attribute is dropped.
     private func checkCallerCredentials(event: xpc_object_t) throws {
         guard let requirementString = self.codeSigningRequirement else { return }
 
