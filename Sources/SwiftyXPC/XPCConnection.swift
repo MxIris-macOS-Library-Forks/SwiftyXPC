@@ -39,7 +39,11 @@ public class XPCConnection: @unchecked Sendable {
         /// A peer failed the code signing check that SwiftyXPC made itself on macOS versions prior to 12.0.
         ///
         /// SwiftyXPC no longer runs on those versions, and leaves peer checks to XPC, so this error is never produced.
-        @available(*, deprecated, message: "SwiftyXPC no longer produces this error; XPC checks peers itself on macOS 12 and later.")
+        @available(
+            *,
+            deprecated,
+            message: "SwiftyXPC no longer produces this error; XPC checks peers itself on macOS 12 and later."
+        )
         case callerFailedCredentialCheck(OSStatus)
     }
 
@@ -236,7 +240,8 @@ public class XPCConnection: @unchecked Sendable {
         name: String,
         handler: @escaping @Sendable (XPCMessageContext, sending Request) async throws -> Void
     ) {
-        self.setMessageHandler(name: name) { (context: XPCMessageContext, request: sending Request) async throws -> XPCNull in
+        self.setMessageHandler(name: name) {
+            (context: XPCMessageContext, request: sending Request) async throws -> XPCNull in
             try await handler(context, request)
             return XPCNull.shared
         }
@@ -465,7 +470,9 @@ public class XPCConnection: @unchecked Sendable {
     ///
     /// - Throws: Any errors that occur in the process of encoding the message.
     public func sendOnewayMessage(name: String, message: some Encodable) throws {
-        xpc_connection_send_message(self.connection, self.makeMessage(name: name, body: try XPCEncoder().encode(message)))
+        let body = try XPCEncoder().encode(message)
+
+        xpc_connection_send_message(self.connection, self.makeMessage(name: name, body: body))
     }
 
     /// Issues a barrier against the connection's message-send activity.

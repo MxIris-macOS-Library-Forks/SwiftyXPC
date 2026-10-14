@@ -34,6 +34,8 @@ public struct XPCPeerRequirement: Sendable {
     /// See Apple's Technote 3127, "Inside Code Signing: Requirements", for the language.
     ///
     /// - Parameter requirement: The requirement, in the code signing requirement language.
+    ///
+    /// - Returns: The requirement.
     public static func codeSigning(_ requirement: String) -> XPCPeerRequirement {
         Self(.codeSigning(requirement))
     }
@@ -41,6 +43,8 @@ public struct XPCPeerRequirement: Sendable {
     /// A requirement that the peer has an entitlement, whatever its value.
     ///
     /// - Parameter entitlement: The name of the entitlement.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
     public static func hasEntitlement(_ entitlement: String) -> XPCPeerRequirement {
         Self(.entitlementExists(entitlement))
@@ -51,6 +55,8 @@ public struct XPCPeerRequirement: Sendable {
     /// - Parameters:
     ///   - entitlement: The name of the entitlement.
     ///   - value: The value the entitlement must have.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
     public static func entitlement(_ entitlement: String, matches value: Bool) -> XPCPeerRequirement {
         Self(.entitlementMatches(entitlement, value: xpc_bool_create(value)))
@@ -61,6 +67,8 @@ public struct XPCPeerRequirement: Sendable {
     /// - Parameters:
     ///   - entitlement: The name of the entitlement.
     ///   - value: The value the entitlement must have.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
     public static func entitlement(_ entitlement: String, matches value: String) -> XPCPeerRequirement {
         Self(.entitlementMatches(entitlement, value: xpc_string_create(value)))
@@ -71,6 +79,8 @@ public struct XPCPeerRequirement: Sendable {
     /// - Parameters:
     ///   - entitlement: The name of the entitlement.
     ///   - value: The value the entitlement must have.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
     public static func entitlement(_ entitlement: String, matches value: Int64) -> XPCPeerRequirement {
         Self(.entitlementMatches(entitlement, value: xpc_int64_create(value)))
@@ -82,16 +92,24 @@ public struct XPCPeerRequirement: Sendable {
     /// with a Developer ID certificate.
     ///
     /// - Parameter signingIdentifier: A signing identifier the peer must also have, or `nil` for any.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
-    public static func isFromSameTeam(andMatchesSigningIdentifier signingIdentifier: String? = nil) -> XPCPeerRequirement {
+    public static func isFromSameTeam(
+        andMatchesSigningIdentifier signingIdentifier: String? = nil
+    ) -> XPCPeerRequirement {
         Self(.teamIdentity(signingIdentifier: signingIdentifier))
     }
 
     /// A requirement that the peer is signed by Apple as part of the operating system.
     ///
     /// - Parameter signingIdentifier: A signing identifier the peer must also have, or `nil` for any.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
-    public static func isPlatformCode(andMatchesSigningIdentifier signingIdentifier: String? = nil) -> XPCPeerRequirement {
+    public static func isPlatformCode(
+        andMatchesSigningIdentifier signingIdentifier: String? = nil
+    ) -> XPCPeerRequirement {
         Self(.platformIdentity(signingIdentifier: signingIdentifier))
     }
 
@@ -110,12 +128,14 @@ public struct XPCPeerRequirement: Sendable {
     ///     let connection = try XPCConnection(type: type, requirement: .lightweightCodeRequirement(requirement))
     ///
     /// - Parameter requirement: An XPC dictionary. It is copied, so changing it later does not change the requirement.
+    ///
+    /// - Returns: The requirement.
     @available(macOS 14.4, macCatalyst 17.4, *)
     public static func lightweightCodeRequirement(_ requirement: xpc_object_t) -> XPCPeerRequirement {
         Self(.lightweightCodeRequirement(xpc_copy(requirement) ?? requirement))
     }
 
-    /// Requires `connection`'s peer to satisfy this requirement.
+    /// Makes XPC check the peer of a connection against this requirement.
     ///
     /// - Throws: `XPCError.invalidCodeSignatureRequirement` or `XPCError.invalidPeerRequirement` if XPC rejects it.
     internal func apply(to connection: xpc_connection_t) throws {

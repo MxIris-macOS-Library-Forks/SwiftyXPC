@@ -24,7 +24,8 @@ extension XPCEncodingContainer {
             return try representable.makeXPCObject()
         case let fileDescriptor as FileDescriptor:
             guard let object = xpc_fd_create(fileDescriptor.rawValue) else {
-                let description = "Could not put file descriptor \(fileDescriptor.rawValue) in a message: \(Errno(rawValue: errno))"
+                let reason = Errno(rawValue: errno)
+                let description = "Could not put file descriptor \(fileDescriptor.rawValue) in a message: \(reason)"
                 throw EncodingError.invalidValue(
                     value,
                     EncodingError.Context(codingPath: codingPath, debugDescription: description)

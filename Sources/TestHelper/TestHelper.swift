@@ -70,13 +70,19 @@ final class XPCService: Sendable {
 
         remoteConnection.activate()
 
-        let opening: String = try await remoteConnection.sendMessage(name: JokeMessage.askForJoke, request: "Tell me a joke")
+        let opening: String = try await remoteConnection.sendMessage(
+            name: JokeMessage.askForJoke,
+            request: "Tell me a joke"
+        )
 
         guard opening == "Knock knock" else {
             throw JokeMessage.NotAKnockKnockJoke(complaint: "That was not a knock knock joke!")
         }
 
-        let whosThere: String = try await remoteConnection.sendMessage(name: JokeMessage.whosThere, request: "Who's there?")
+        let whosThere: String = try await remoteConnection.sendMessage(
+            name: JokeMessage.whosThere,
+            request: "Who's there?"
+        )
 
         try await remoteConnection.sendMessage(name: JokeMessage.who, request: "\(whosThere) who?")
 

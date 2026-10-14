@@ -6,4 +6,4 @@
 
 | # | 标题 | 状态 |
 |---|------|------|
-| draft | [Swift Concurrency 现代化与 1.0 缺陷修复](draft-swift-concurrency-1-0.md) | Accepted |
+| draft | [Swift Concurrency 现代化与 1.0 缺陷修复](draft-swift-concurrency-1-0.md) | In Progress |

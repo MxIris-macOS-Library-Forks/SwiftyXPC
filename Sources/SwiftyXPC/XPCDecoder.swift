@@ -14,7 +14,11 @@ private protocol XPCDecodingContainer {
 }
 extension XPCDecodingContainer {
     fileprivate func makeErrorContext(description: String, underlyingError: Error? = nil) -> DecodingError.Context {
-        DecodingError.Context(codingPath: self.codingPath, debugDescription: description, underlyingError: underlyingError)
+        DecodingError.Context(
+            codingPath: self.codingPath,
+            debugDescription: description,
+            underlyingError: underlyingError
+        )
     }
 
     fileprivate func checkType(xpcType: xpc_type_t, swiftType: Any.Type, xpc: xpc_object_t) throws {

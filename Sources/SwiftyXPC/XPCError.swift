@@ -8,7 +8,7 @@ import XPC
 /// so you can simply make this class conform to `LocalizedError` with an empty implementation to allow Foundation clients to easily get
 /// user-facing error description strings:
 ///
-///     extension XPCError: LocalizedError {}
+///     extension XPCError: @retroactive LocalizedError {}
 ///
 /// However, this default implementation is not guaranteed to be correctly localized.
 public enum XPCError: Error, Codable, Sendable {

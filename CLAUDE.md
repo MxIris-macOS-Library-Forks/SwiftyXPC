@@ -110,7 +110,7 @@ The decoder reads data from other processes, so it must throw, never trap, on an
 
 ### Activation discipline
 
-Every `XPCConnection` and `XPCListener` starts inactive. The public API requires `.activate()` before any send/receive. Tests, the example app, and `TestHelper` all follow this ordering: configure handlers → set `errorHandler` → `.activate()`. The only exception is `MessageSender` in the example app, which calls `.resume()` (legacy pattern); new code should prefer `.activate()`.
+Every `XPCConnection` and `XPCListener` starts inactive. The public API requires `.activate()` before any send/receive. Tests, the example app, and `TestHelper` all follow this ordering: configure handlers → set `errorHandler` → `.activate()`.
 
 ## Conventions and Gotchas
 
@@ -121,7 +121,9 @@ Every `XPCConnection` and `XPCListener` starts inactive. The public API requires
 - **Message handler task lifetime.** There is no cancellation propagation from the remote side — a cancelled connection does not cancel in-flight handler tasks, and cancelling a task that awaits `sendMessage` does not cancel the XPC message. If adding cooperative cancellation, add it explicitly; do not assume it exists.
 - **Removed API:** `XPCConnection.sendOnewayMessage(message:name:)` is gone, and `sendOnewayMessage(name:message:)` requires a name: a message without one cannot be routed.
 - **`SwiftyXPC/Extensions/` at the repo root (not under `Sources/`) is empty** and exists only because the Xcode project references it. The SPM-visible extension lives at `Sources/SwiftyXPC/Extensions/String+SwiftyXPC.swift`.
-- **The example app is a separate Xcode project** at `Example App/Example App.xcodeproj` with its own embedded XPC service target. It's not built by `swift build` and uses a different bundle ID (`com.charlessoft.SwiftyXPC.Example-App.xpc`) from the test helper.
+- **The example app is a separate Xcode project** at `Example App/Example App.xcodeproj` with its own embedded XPC service target. It's not built by `swift build`, uses a different bundle ID (`com.charlessoft.SwiftyXPC.Example-App.xpc`) from the test helper, references this package through a local package reference (`relativePath = ..`), and builds in the Swift 6 language mode. Check it compiles after any public API change: `xcodebuild -project "Example App/Example App.xcodeproj" -scheme "Example App" -derivedDataPath <agent path> CODE_SIGNING_ALLOWED=NO build`.
+- **Thread Sanitizer.** After touching dispatch, locking, or handler storage, run the suite once with `swift test --sanitize=thread` (use a separate scratch path; it rebuilds everything).
+- **Design history.** Why the dispatcher, the language mode, the peer requirement plumbing, and the 0.5 compatibility rules look the way they do is recorded in `Documentations/Internal/Version1Implementation.md`; the decision record is the evolution proposal it links to.
 
 ## Reference for XPC Internals
 

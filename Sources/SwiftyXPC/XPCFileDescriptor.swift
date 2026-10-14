@@ -27,12 +27,14 @@ public final class XPCFileDescriptor: XPCObjectRepresentable, Sendable {
     internal let fileDescriptor: Int32
 
     /// Create an `XPCFileDescriptor` from a raw file descriptor and take the ownership of it.
+    ///
     /// The file descriptor will be closed automatically when this instance is deinitialized.
     public init(fileDescriptor: Int32) {
         self.fileDescriptor = fileDescriptor
     }
 
     /// Create an `XPCFileDescriptor` from a `FileDescriptor` and take the ownership of it.
+    ///
     /// The file descriptor will be closed automatically when this instance is deinitialized.
     public init(fileDescriptor: FileDescriptor) {
         self.fileDescriptor = fileDescriptor.rawValue
@@ -69,7 +71,9 @@ public final class XPCFileDescriptor: XPCObjectRepresentable, Sendable {
         return object
     }
 
-    /// Duplicate the file descriptor. The caller is responsible for closing the returned file descriptor.
+    /// Duplicate the file descriptor.
+    ///
+    /// The caller is responsible for closing the returned file descriptor.
     public func dup() throws -> Int32 {
         let fd = Darwin.dup(fileDescriptor)
 
@@ -80,7 +84,9 @@ public final class XPCFileDescriptor: XPCObjectRepresentable, Sendable {
         return fd
     }
 
-    /// Duplicate the file descriptor. The caller is responsible for closing the returned `FileDescriptor`.
+    /// Duplicate the file descriptor.
+    ///
+    /// The caller is responsible for closing the returned `FileDescriptor`.
     public func duplicate() throws -> FileDescriptor {
         try FileDescriptor(rawValue: self.fileDescriptor).duplicate()
     }

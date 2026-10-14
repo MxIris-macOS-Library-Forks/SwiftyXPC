@@ -27,10 +27,15 @@ struct SwiftyXPCTests {
     @Test func `Code signature verification`() async throws {
         let goodConn = try self.openConnection(requirement: .codeSigning(self.helperCodeSigningRequirement()))
 
-        let response: String = try await goodConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
+        let response: String = try await goodConn.sendMessage(
+            name: CommandSet.capitalizeString,
+            request: "Testing 1 2 3"
+        )
         #expect(response == "TESTING 1 2 3")
 
-        let badConn = try self.openConnection(requirement: .codeSigning("identifier \"com.apple.true\" and anchor apple"))
+        let badConn = try self.openConnection(
+            requirement: .codeSigning(#"identifier "com.apple.true" and anchor apple"#)
+        )
 
         let verificationError = await #expect(throws: XPCError.self) {
             try await badConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
@@ -71,7 +76,10 @@ struct SwiftyXPCTests {
         XPCErrorRegistry.shared.registerDomain(forErrorType: DataInfo.DataError.self)
 
         let dataError = await #expect(throws: DataInfo.DataError.self) {
-            try await conn.sendMessage(name: CommandSet.transportData, request: "It's Lore being sneaky".data(using: .utf8)!)
+            try await conn.sendMessage(
+                name: CommandSet.transportData,
+                request: "It's Lore being sneaky".data(using: .utf8)!
+            )
         }
         #expect(dataError?.failureReason == "fluctuation in the positronic matrix")
     }
@@ -193,7 +201,9 @@ struct SwiftyXPCTests {
 
     @available(macOS 14.4, macCatalyst 17.4, *)
     @Test func `A peer without a required entitlement is rejected`() async throws {
-        let conn = try self.openConnection(requirement: .hasEntitlement("com.charlessoft.SwiftyXPC.Tests.NoSuchEntitlement"))
+        let conn = try self.openConnection(
+            requirement: .hasEntitlement("com.charlessoft.SwiftyXPC.Tests.NoSuchEntitlement")
+        )
         defer { conn.cancel() }
 
         let error = await #expect(throws: XPCError.self) {

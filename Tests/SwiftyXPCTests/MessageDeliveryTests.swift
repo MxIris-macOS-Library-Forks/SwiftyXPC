@@ -21,7 +21,10 @@ struct MessageDeliveryTests {
         func encode(to encoder: any Encoder) throws {
             throw EncodingError.invalidValue(
                 self,
-                EncodingError.Context(codingPath: encoder.codingPath, debugDescription: "This error refuses to be encoded.")
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "This error refuses to be encoded."
+                )
             )
         }
     }
@@ -181,7 +184,9 @@ struct MessageDeliveryTests {
     /// Regression test: `XPCEncoder(replyingTo:)` used to stop at a precondition, whatever it was asked to encode.
     @Test func `A reply encoded by XPCEncoder(replyingTo:) reaches its sender`() async throws {
         let listener = RawListener { message, peer in
-            guard let reply = try? XPCEncoder(replyingTo: message).encode(CoderRoundTripTests.KeyedIdentifier(value: "reply")) else {
+            let identifier = CoderRoundTripTests.KeyedIdentifier(value: "reply")
+
+            guard let reply = try? XPCEncoder(replyingTo: message).encode(identifier) else {
                 return
             }
 

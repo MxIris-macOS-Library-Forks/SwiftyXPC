@@ -18,7 +18,7 @@ let futureConcurrencySettings: [SwiftSetting] = [
 /// `ImportObjcForwardDeclarations` (SE-0384) is on: `NSObject`'s `description` returns an `NSString` that only
 /// Foundation defines. The Swift 6 language mode cannot switch that one feature off, so the library stays in the
 /// Swift 5 mode and turns on everything else the Swift 6 mode would, which keeps the full data-race checking.
-/// See Documentations/Evolutions/draft-swift-concurrency-1-0.md.
+/// The probes that pinned this down are in Documentations/Internal/Version1Implementation.md, decision 6.
 let swift6FeaturesExceptForwardDeclarations: [SwiftSetting] = [
     .swiftLanguageMode(.v5),
     .enableUpcomingFeature("ConciseMagicFile"),

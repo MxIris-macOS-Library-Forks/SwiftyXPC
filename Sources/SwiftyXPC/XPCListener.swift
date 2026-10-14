@@ -98,7 +98,8 @@ public final class XPCListener: Sendable {
         name: String,
         handler: @escaping @Sendable (XPCMessageContext, sending Request) async throws -> Void
     ) {
-        self.setMessageHandler(name: name) { (context: XPCMessageContext, request: sending Request) async throws -> XPCNull in
+        self.setMessageHandler(name: name) {
+            (context: XPCMessageContext, request: sending Request) async throws -> XPCNull in
             try await handler(context, request)
             return XPCNull.shared
         }

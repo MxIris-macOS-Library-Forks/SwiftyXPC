@@ -1,13 +1,13 @@
 # Draft - Swift Concurrency 现代化与 1.0 缺陷修复
 
-- **状态**: Accepted
+- **状态**: In Progress
 - **作者**: JH
 - **创建日期**: 2026-10-13
 - **最后更新**: 2026-10-14
 - **所属愿景**: 无
 - **关联提案**: 无
 - **实现分支 / PR**: `feature/swift-concurrency-1.0`（worktree `.worktrees/SwiftyXPC-Concurrency`）
-- **配套文档**: 待定 —— 落地时登记实现说明 / 使用指南的链接
+- **配套文档**: [实现说明](../Internal/Version1Implementation.md)（含与提案的差异）；[术语表](../Glossary.md)；面向使用者的契约写在仓库根目录 `README.md`；互通验证见 `Tests/Interop/README.md`
 
 ## 摘要
 
@@ -447,3 +447,16 @@ handler 签名的变化无法用 `@available(*, deprecated, renamed:)` 平滑过
 | 2026-10-13 | 附加范围：`XPCObjectRepresentable`、绕开编译器崩溃并切 Swift 6、测试迁移到 Swift Testing、可选协议版本号 | 用户全选 |
 | 2026-10-13 | 技术细节经用户确认 | Catalyst 15；删除 10.15/11 路径；退路特性组合加 `NonisolatedNonsendingByDefault`；锁（15+ `Mutex`）；执行器（14+ `DispatchSerialQueue`、12–13 自写、26+ `Task.immediate`）；发送接口 `nonisolated(nonsending)` + `sending`；`ErrorHandler` `@Sendable`；每连接一个校验条件；`connectionInvalid(reason:)`；`XPCFileDescriptor` `Sendable`；删除已废弃的 `sendOnewayMessage(message:name:)`；私有 API 集中到一个文件；README / `CLAUDE.md` / Example App 同步；在 worktree `.worktrees/SwiftyXPC-Concurrency` 的 `feature/swift-concurrency-1.0` 分支上开发，不经点名不推送、不打 tag |
 | 2026-10-14 | Accepted | 用户批准开工：「开工写完直接提交推送」；推送功能分支由此获得授权，打 tag 仍需另行点名 |
+| 2026-10-14 | 库 target 采用语言模式退路 | Swift 6 模式的编译器崩溃无法局部绕开：本模块不导入 Foundation 时，任何需要 XPC 对象类型元数据的写法（存储属性、enum 关联值、数组、泛型实参、`as?`）都会触发，探针结果记在实现说明决策六。库 target 用 Swift 5 + 除 `ImportObjcForwardDeclarations` 外的全部 Swift 6 特性；测试、helper、共享测试代码导入 Foundation，用 Swift 6 模式；所有 target 打开 `NonisolatedNonsendingByDefault`。是否向 swiftlang/swift 报告仍由用户决定 |
+| 2026-10-14 | 派发不用 `assumeIsolated` | 查证 Swift 5.10 运行时：macOS 15 前在 dispatch block 里判断 actor 隔离会 trap。改为加锁 FIFO + 部分应用 `self.startOldestJob` 创建隔离任务、弹出最旧的 job；26+ 仍用 `Task.immediate`。新增内部 `MessageDispatcher.Strategy`，测试在本机覆盖 macOS 12–13 与 14–25 的路径；变异检查（后进先出、严格串行）确认测试能抓到问题 |
+| 2026-10-14 | handler 返回值不标 `sending`，泛型参数加 `SendableMetatype` | Swift 6.4 拒绝把方法引用（`handler: self.sayHello`）转换成返回 `sending` 值的函数类型，即使返回类型是 `Sendable`。handler 默认在连接的执行器上运行，响应在同一处编码，去掉后仍安全。handler 闭包在连接执行器上用到 `Request.self` / `Response.self`，SE-0470 要求 `SendableMetatype` |
+| 2026-10-14 | `sendMessage` 在调用方解码回复 | 原定在回复处理块里解码，会迫使 `Response` 满足 `SendableMetatype`；改为把原始回复交回调用方再解码。`XPCDecoder.decode` 返回 `sending T` |
+| 2026-10-14 | 对端校验统一用 14.4 的公开 setter；`senderSatisfies` 用 `dlsym` | `xpc_connection_set_peer_requirement` 与 `xpc_peer_requirement_*` 在 SDK 中对 Swift 隐藏（`XPC_SWIFT_NOEXPORT`），且 26 前不存在，`@_silgen_name` 强引用会让库在 12–25 无法加载。代码签名要求的逐条消息校验用 Security。`xpc_dictionary_get_audit_token` 在 macOS 12.0.1 / 13.0 的 shared cache 中确认存在 |
+| 2026-10-14 | listener 与已接受连接共享 handler 表 | 替代接受连接时拷贝与匿名 listener 的 `isMulti` 特例：listener 上后设的 handler 对已连上的对端也生效 |
+| 2026-10-14 | `XPCNull` 也遵循 `XPCObjectRepresentable` | 三种以 XPC 对象本身传输的值统一走一个协议，编解码器少一处特判 |
+| 2026-10-14 | 落地顺序调整 | 先升平台（步骤 4）再修缺陷（步骤 3），避免为 macOS 10.15 / 11 再写一套修复；缺陷回归测试仍先于修复提交（`withKnownIssue` 证明能复现，会崩溃的单独运行确认） |
+| 2026-10-14 | 提案外的缺陷一并修复 | 解码器在对端可控输入上的三处 trap、`decodeNil()` 语义、第二次请求容器的前置条件崩溃、`superEncoder()` / `superDecoder(forKey:)`、`XPCEncoder(replyingTo:)` 必崩、错误负载解不出时整体失败、端点 / bundle 连接遇到非法签名要求时崩溃、`XPC_TYPE_SHMEM` 映射。每项先在旧代码上确认失败或崩溃，清单见实现说明 |
+| 2026-10-14 | 与 0.5.105 互通验证通过 | 两个方向各 8 项检查全部通过（macOS 27.2）。验证程序与步骤提交到 `Tests/Interop/`；`WireCompatibilityTests` 用 C API 模拟 0.5 对端做常驻测试。1.0 发送方静默丢弃 0.5 接收方对单向消息的多余回复 |
+| 2026-10-14 | Example App 改为本地包引用并升 Swift 6 模式 | 原工程远程引用上游 CharlesJS/SwiftyXPC，从未编译本仓库代码；改为 `relativePath = ..`。Swift 5 模式下方法引用不会被推断为 `@Sendable`，示例改用 Swift 6 模式后零警告 |
+| 2026-10-14 | 配套文档与术语表的判断 | 写实现说明（下次维护会踩、代码看不出的决策：派发、语言模式、对端校验的接入方式、0.5 兼容规则，以及与提案的差异）。不另写使用指南：调用方契约（handler 的运行方式、对端校验、与 0.5 对端互通）写进公开的 README，避免两处权威。新建项目术语表，登记 6 个术语 |
+| 2026-10-14 | In Progress | 实现全部完成并推送到功能分支 `feature/swift-concurrency-1.0`；合入 main 时分配提案编号并置为 Implemented |

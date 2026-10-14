@@ -90,7 +90,7 @@ public final class XPCErrorRegistry: Sendable {
     /// To avoid requiring Foundation, this type does not formally adopt the `CustomNSError` protocol, but implements methods which
     /// can be used as a default implementation of the protocol. Foundation clients may want to add an empty implementation as in the example below.
     ///
-    ///     extension XPCErrorRegistry.BoxedError: CustomNSError {}
+    ///     extension XPCErrorRegistry.BoxedError: @retroactive CustomNSError {}
     public struct BoxedError: Error, Codable {
         private enum Storage {
             case codable(Error & Codable)

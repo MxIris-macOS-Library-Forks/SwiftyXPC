@@ -13,7 +13,6 @@ actor MessageSender {
     static let shared = try! MessageSender()
 
     private let connection: XPCConnection
-    @Published var messageSendInProgress = false
 
     private init() throws {
         let connection = try XPCConnection(type: .remoteService(bundleID: "com.charlessoft.SwiftyXPC.Example-App.xpc"))
@@ -24,32 +23,28 @@ actor MessageSender {
             logger.error("The connection to the XPC service received an error: \(error.localizedDescription)")
         }
 
-        connection.resume()
+        connection.activate()
         self.connection = connection
     }
 
     func capitalize(string: String) async throws -> String {
-        self.messageSendInProgress = true
-        defer { self.messageSendInProgress = false }
-
-        return try await self.connection.sendMessage(name: CommandSet.capitalizeString, request: string)
+        try await self.connection.sendMessage(name: CommandSet.capitalizeString, request: string)
     }
 
-    func startLongRunningTask(callback: @escaping (Double?) -> Void) async throws {
-        self.messageSendInProgress = true
-        defer { self.messageSendInProgress = false }
+    func startLongRunningTask(callback: @escaping @Sendable (Double?) -> Void) async throws {
+        let listener = try XPCListener(type: .anonymous)  // in an actual product, pass a requirement
 
-        let listener = try XPCListener(type: .anonymous, codeSigningRequirement: nil) // don't actually use nil
-
+        // The service reports progress with one-way messages, which arrive in the order it sent them.
         listener.setMessageHandler(name: LongRunningTaskMessage.progressNotification) { (_, progress: Double) in
             callback(progress)
         }
 
-        listener.activate()
-        listener.errorHandler = {
+        listener.errorHandler = { _, error in
             callback(nil)
-            print("something went wrong: \($1)")
+            print("something went wrong: \(error)")
         }
+
+        listener.activate()
 
         try await self.connection.sendMessage(name: CommandSet.longRunningTask, request: listener.endpoint)
     }

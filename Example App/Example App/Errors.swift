@@ -10,7 +10,7 @@ import SwiftUI
 import SwiftyXPC
 
 // just to make error reporting a little nicer
-extension XPCError: LocalizedError {
+extension XPCError: @retroactive LocalizedError {
     /// Implementation of `LocalizedError`.
     public var errorDescription: String? {
         switch self {
@@ -20,6 +20,8 @@ extension XPCError: LocalizedError {
             return NSLocalizedString("XPC Connection Interrupted", comment: "XPC Connection Interrupted")
         case .invalidCodeSignatureRequirement:
             return NSLocalizedString("Bad Code Signature Requirement", comment: "Bad Code Signature Requirement")
+        case .invalidPeerRequirement:
+            return NSLocalizedString("Bad Peer Requirement", comment: "Bad Peer Requirement")
         case .terminationImminent:
             return NSLocalizedString("XPC Service Termination Imminent", comment: "XPC Service Termination Imminent")
         case .unknown(let code):

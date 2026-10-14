@@ -8,15 +8,16 @@
 import SwiftyXPC
 
 @main
-class XPCService {
+final class XPCService: Sendable {
     static func main() {
         do {
             let xpcService = XPCService()
 
-            // In an actual product, you should always set a real code signing requirement here, for security
-            let requirement: String? = nil
+            // In an actual product, you should always require something of the peer here, for security; for instance
+            // `.codeSigning("anchor apple generic and identifier \"com.charlessoft.SwiftyXPC.Example-App\"")`.
+            let requirement: XPCPeerRequirement? = nil
 
-            let serviceListener = try XPCListener(type: .service, codeSigningRequirement: requirement)
+            let serviceListener = try XPCListener(type: .service, requirement: requirement)
 
             serviceListener.setMessageHandler(name: CommandSet.capitalizeString, handler: xpcService.capitalizeString)
             serviceListener.setMessageHandler(name: CommandSet.longRunningTask, handler: xpcService.longRunningTask)
@@ -28,15 +29,12 @@ class XPCService {
         }
     }
 
-    private func capitalizeString(_: XPCConnection, string: String) async throws -> String {
+    private func capitalizeString(_: XPCMessageContext, string: String) async throws -> String {
         return string.uppercased()
     }
 
-    private func longRunningTask(_: XPCConnection, endpoint: XPCEndpoint) async throws {
-        let remoteConnection = try XPCConnection(
-            type: .remoteServiceFromEndpoint(endpoint),
-            codeSigningRequirement: nil
-        )
+    private func longRunningTask(_: XPCMessageContext, endpoint: XPCEndpoint) async throws {
+        let remoteConnection = try XPCConnection(type: .remoteServiceFromEndpoint(endpoint))
 
         remoteConnection.activate()
 

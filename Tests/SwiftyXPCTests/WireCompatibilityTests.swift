@@ -11,7 +11,9 @@ import XPC
 /// that 0.5 produces and expects is a contract. These tests pin it down without a 0.5 build at hand.
 // swift-format-ignore: AllPublicDeclarationsHaveDocumentation
 struct WireCompatibilityTests {
-    /// `XPCError` as SwiftyXPC 0.5 declares it. Its synthesized `Codable` conformance is the format 0.5 peers use.
+    /// `XPCError` as SwiftyXPC 0.5 declares it.
+    ///
+    /// Its synthesized `Codable` conformance is the format 0.5 peers use.
     enum LegacyXPCError: Error, Codable, Equatable {
         case connectionInterrupted
         case connectionInvalid
@@ -36,12 +38,17 @@ struct WireCompatibilityTests {
 
     @Test(arguments: ["xpc_connection_cancel()", nil] as [String?])
     func `An invalid connection reaches a 0.5 peer as plain connectionInvalid`(reason: String?) throws {
-        #expect(try self.reencode(XPCError.connectionInvalid(reason: reason), as: LegacyXPCError.self) == .connectionInvalid)
+        let legacyError = try self.reencode(XPCError.connectionInvalid(reason: reason), as: LegacyXPCError.self)
+
+        #expect(legacyError == .connectionInvalid)
     }
 
     @Test func `Unchanged cases decode the same in both directions`() throws {
-        #expect(try self.reencode(LegacyXPCError.unknown("Peer Forbidden"), as: XPCError.self).unknownDescription == "Peer Forbidden")
-        #expect(try self.reencode(XPCError.unknown("Peer Forbidden"), as: LegacyXPCError.self) == .unknown("Peer Forbidden"))
+        let currentError = try self.reencode(LegacyXPCError.unknown("Peer Forbidden"), as: XPCError.self)
+        #expect(currentError.unknownDescription == "Peer Forbidden")
+
+        let legacyError = try self.reencode(XPCError.unknown("Peer Forbidden"), as: LegacyXPCError.self)
+        #expect(legacyError == .unknown("Peer Forbidden"))
         #expect(try self.reencode(XPCError.connectionInterrupted, as: LegacyXPCError.self) == .connectionInterrupted)
     }
 
@@ -52,7 +59,8 @@ struct WireCompatibilityTests {
     }
     /// Opens a connection from this library to `listener`, a stand-in for a peer built with something else.
     private func connect(to listener: RawListener) throws -> XPCConnection {
-        let connection = try XPCConnection(type: .remoteServiceFromEndpoint(SwiftyXPC.XPCEndpoint(xpcObject: listener.endpoint)))
+        let endpoint = try SwiftyXPC.XPCEndpoint(xpcObject: listener.endpoint)
+        let connection = try XPCConnection(type: .remoteServiceFromEndpoint(endpoint))
         connection.activate()
         return connection
     }
@@ -120,7 +128,8 @@ struct WireCompatibilityTests {
         let reply = await sendRawMessage(message, to: listener.endpoint)
 
         try #require(xpc_get_type(reply) == XPC_TYPE_DICTIONARY)
-        #expect(try XPCDecoder().decode(type: String.self, from: try #require(xpc_dictionary_get_value(reply, WireFormat.bodyKey))) == "FROM 0.5")
+        let body = try #require(xpc_dictionary_get_value(reply, WireFormat.bodyKey))
+        #expect(try XPCDecoder().decode(type: String.self, from: body) == "FROM 0.5")
     }
 
     /// A 0.5 receiver answers every one-way message with a nameless message of its own; it carries nothing to act on.

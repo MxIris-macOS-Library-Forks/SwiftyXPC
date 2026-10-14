@@ -39,8 +39,10 @@ struct ContentView: View {
                     do {
                         self.response = NSLocalizedString("Please Wait…", comment: "Please Wait...")
 
-                        try await MessageSender.shared.startLongRunningTask() {
-                            self.progress = $0
+                        try await MessageSender.shared.startLongRunningTask { progress in
+                            Task { @MainActor in
+                                self.progress = progress
+                            }
                         }
 
                         self.response = NSLocalizedString("Done!", comment: "Done message")

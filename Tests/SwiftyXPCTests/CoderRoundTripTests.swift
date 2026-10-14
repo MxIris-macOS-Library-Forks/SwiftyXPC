@@ -80,7 +80,9 @@ struct CoderRoundTripTests {
 
     /// The same failure at greater depth, which one extra level of descent would still have missed.
     @Test func `Collections nested several containers deep round-trip`() throws {
-        let nestedEnumeration = NestedEnumeration.wrap(inner: .wrap(inner: .leaf(data: Data([9, 8, 7]), numbers: [4, 5])))
+        let nestedEnumeration = NestedEnumeration.wrap(
+            inner: .wrap(inner: .leaf(data: Data([9, 8, 7]), numbers: [4, 5]))
+        )
         #expect(try self.roundTrip(nestedEnumeration) == nestedEnumeration)
 
         let structureWithEnumerationArray = StructureWithEnumerationArray(
@@ -294,7 +296,9 @@ struct CoderRoundTripTests {
         let fileDescriptor = open("/dev/null", O_RDONLY)
         try #require(fileDescriptor >= 0)
 
-        let message = MessageWithForwardedDescriptor(descriptor: Forwarding(XPCFileDescriptor(fileDescriptor: fileDescriptor)))
+        let message = MessageWithForwardedDescriptor(
+            descriptor: Forwarding(XPCFileDescriptor(fileDescriptor: fileDescriptor))
+        )
 
         let encoded = try XPCEncoder().encode(message)
         let descriptorObject = try #require(xpc_dictionary_get_value(encoded, "descriptor"))
@@ -420,7 +424,9 @@ struct CoderRoundTripTests {
     @Test func `A type that asks for a second container decodes`() throws {
         let encoded = try XPCEncoder().encode(KeyedIdentifier(value: "identifier"))
 
-        #expect(try XPCDecoder().decode(type: FlexibleIdentifier.self, from: encoded) == FlexibleIdentifier(value: "identifier"))
+        let decoded = try XPCDecoder().decode(type: FlexibleIdentifier.self, from: encoded)
+
+        #expect(decoded == FlexibleIdentifier(value: "identifier"))
     }
 
     /// Regression test: an error case that a newer peer added used to make the whole error undecodable.

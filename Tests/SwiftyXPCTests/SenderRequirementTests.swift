@@ -37,7 +37,8 @@ struct SenderRequirementTests {
             )
 
             self.designatedRequirement = try #require(requirementString) as String
-            self.signingIdentifier = try #require((information as? [String: Any])?[kSecCodeInfoIdentifier as String] as? String)
+            let signingInformation = information as? [String: Any]
+            self.signingIdentifier = try #require(signingInformation?[kSecCodeInfoIdentifier as String] as? String)
         }
     }
 
@@ -91,9 +92,9 @@ struct SenderRequirementTests {
     @Test func `The sender satisfies a lightweight code requirement for its own identifier`() async throws {
         let ownSignature = try OwnSignature()
 
-        let results = try await self.check([
-            .lightweightCodeRequirement(Self.lightweightCodeRequirement(signingIdentifier: ownSignature.signingIdentifier))
-        ])
+        let ownIdentifierRequirement = Self.lightweightCodeRequirement(signingIdentifier: ownSignature.signingIdentifier)
+
+        let results = try await self.check([.lightweightCodeRequirement(ownIdentifierRequirement)])
 
         #expect(try results.map { try $0.get() } == [true])
     }
