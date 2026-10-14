@@ -47,27 +47,35 @@ The tests use Swift Testing. Suites that need no other process (`CoderRoundTripT
 
 ### Request/response is string-name routing over Codable payloads
 
-The public surface is `XPCConnection` and `XPCListener`. Both expose `setMessageHandler(name:handler:)` variants that take `async throws` closures with `Codable` request and response types. A sent message is an `xpc_dictionary_t` with three well-known keys (private to `XPCConnection`):
+The public surface is `XPCConnection` and `XPCListener`. Both expose `setMessageHandler(name:handler:)` variants that take `@Sendable async throws` closures whose first argument is an `XPCMessageContext` (the connection, the message name, and the sender's identity read from *this* message's audit token) and whose request is `Decodable` and passed as `sending`; the response is `Encodable`. Handler generic parameters are also `SendableMetatype`, because the closure decodes and encodes on the connection's executor. The response is deliberately *not* `sending`: Swift 6.4 refuses to convert a method reference such as `self.sayHello` to a function type with a `sending` result, even for a `Sendable` type. `sendMessage` is `nonisolated(nonsending)`, encodes the request in the caller's isolation, and decodes the reply there too, returning it as `sending`. A sent message is an `xpc_dictionary_t` with three well-known keys (private to `XPCConnection`):
 
 - `MessageKeys.name` — the handler name string
 - `MessageKeys.body` — the `XPCEncoder`-encoded request (or response)
 - `MessageKeys.error` — a `BoxedError` payload when the handler threw
 
-The type-erased handler storage is `XPCConnection.MessageHandler`, which captures the concrete `Request`/`Response` types inside a `RawHandler` closure. When a message arrives, `XPCConnection.handleEvent` dispatches through `respond(to:)`, which spins a `Task` to call the handler, then calls `reply(to:with:)`. Only a message whose sender waits for a reply (`xpc_dictionary_create_reply` returns non-`NULL`) is ever answered:
+The type-erased handler storage is `XPCConnection.MessageHandler`, which captures the concrete `Request`/`Response` types inside a `RawHandler` closure. Handlers live in a `HandlerTable` (locked). When a message arrives, `XPCConnection.handleEvent` hands it to `receive(_:)`, which routes it by name and dispatches a job to the connection's `MessageDispatcher` (below); when the handler finishes, `complete(_:with:reportingUnansweredFailure:)` answers it. Only a message whose sender waits for a reply (`xpc_dictionary_create_reply` returns non-`NULL`) is ever answered:
 
 - a handler's result or error goes back on the reply dictionary; errors are funneled through `XPCErrorRegistry.shared.encodeError(_:)`, and an error that fails to encode is sent as its domain and code alone while the encoding failure goes to this side's `errorHandler`;
 - a message with no name, or no handler for its name, is answered with `XPCConnection.Error.missingMessageName` / `.unexpectedMessage` (and also reported to this side's `errorHandler`), so the sender never mistakes it for `connectionInterrupted`;
 - a one-way message is never answered; its handler's error goes to this side's `errorHandler`. Never send anything "back" for a one-way message: the old code did, as a nameless message the sender could only report as `missingMessageName`.
 
-### XPCListener has three backings — know which one you're dealing with
+### Message dispatch: one serial executor per connection, handlers start in arrival order
 
-`XPCListener.Backing` is a private enum with three cases driven by `ListenerType`:
+Each `XPCConnection` owns a `MessageDispatcher` (`Sources/SwiftyXPC/Internal/MessageDispatcher.swift`), an actor whose executor is a serial dispatch queue that is also the connection's XPC target queue. `dispatch(_:)` appends the job to a locked FIFO and starts a task on the actor (`Task.immediate` on macOS 26+, `Task(operation: self.startOldestJob)` before); the task pops the *oldest* pending job and runs it synchronously until its first suspension point. Because popping and starting happen atomically on the actor, jobs start in arrival order whatever order the tasks run in; a job that awaits lets the next one start. Handler closures are `nonisolated(nonsending)` (the package enables `NonisolatedNonsendingByDefault`), so they run on the dispatcher's executor.
 
-1. `.service` → `.xpcMain`. Calls `xpc_main`. Cannot be cancelled/suspended/resumed (all are `fatalError`). Stores itself in a global (`xpcMainListenerStorage`) because `xpc_main` takes a C function pointer with no context. Message handlers are copied into each incoming `XPCConnection`.
-2. `.machService(name:)` → `.connection(..., isMulti: true)`. Uses `XPC_CONNECTION_MACH_SERVICE_LISTENER`. Each incoming peer becomes a new `XPCConnection` wired with copies of the listener's handlers.
-3. `.anonymous` → `.connection(..., isMulti: false)`. The listener *is* the single connection; handlers are stored directly on that connection, not on the listener's `_messageHandlers` dictionary.
+- Executors: `DispatchSerialQueue`'s own executor on macOS 14+, the in-house `QueueExecutor` on 12–13.
+- Do **not** call `assumeIsolated` from the XPC event handler: before macOS 15 the runtime cannot recognize a dispatch block as running on an actor's queue and traps. Partial application (`self.startOldestJob`) is what puts the task straight onto the actor.
+- Do **not** switch to a default actor: it runs jobs by priority, and XPC delivers each message at its sender's QoS.
+- `MessageDispatcher.Strategy` forces the macOS 14–25 (`.serialQueueExecutor`) or 12–13 (`.queueExecutor`) path; `XPCConnection` / `XPCListener` take it through internal initializers so `DispatchTests` can run the ordering test on every path. Keep that test parameterized over `Strategy.allCases`.
 
-The `isMulti` flag determines whether `setMessageHandler` on the listener writes to `_messageHandlers` (case 1, 2) or forwards to `connection.messageHandlers` (case 3). Getters for `messageHandlers`/`errorHandler` do the same routing. Any new listener-level state must preserve this split.
+### XPCListener: two backings, one shared handler table
+
+`XPCListener.Backing` is `.xpcMain` (for `.service`) or `.connection(XPCConnection)` (for `.anonymous` and `.machService`). The listener's message handlers and error handler live in a `HandlerTable` that every accepted connection consults *after* its own table, at message time — so handlers set on the listener after a peer connected still reach that peer, and a peer without its own `errorHandler` uses the listener's.
+
+1. `.service` → `.xpcMain`. Calls `xpc_main`. Cannot be cancelled/suspended/resumed (all are `fatalError`). Stores itself in a locked global (`xpcMainListener`) because `xpc_main` takes a C function pointer with no context.
+2. `.machService(name:)` / `.anonymous` → `.connection`. The listener's own connection gets a `listenerEventHandler` (built by `makeConnectionAcceptor`) that turns each `XPC_TYPE_CONNECTION` event into an accepted `XPCConnection` and routes every other event to the listener's `errorHandler`. The acceptor captures the listener's parts, not the listener, which does not exist yet when its connection is made.
+
+`XPCListener` is `Sendable`: every stored property is immutable or locked.
 
 ### Code-signing verification is done by libxpc
 
@@ -99,10 +107,11 @@ Every `XPCConnection` and `XPCListener` starts inactive. The public API requires
 
 ## Conventions and Gotchas
 
-- **No Foundation in library sources.** `Sources/SwiftyXPC/` imports `XPC`, `Security`, `System`, `Darwin`, `os`, `Synchronization`. Adding `import Foundation` to the library target reverses a deliberate design choice; put Foundation-dependent helpers in an extension target or in clients instead.
-- **`@unchecked Sendable` on `XPCConnection` and `XPCEndpoint`** is load-bearing — the underlying `xpc_connection_t` / `xpc_endpoint_t` are ObjC objects whose thread-safety is guaranteed by libxpc, not the Swift compiler. Do not remove the annotation without an alternative isolation strategy.
-- **Message handler Task lifetime.** `respond(to:)` wraps incoming dispatch in an unstructured `Task {}`. There is no cancellation propagation from the remote side — a cancelled connection does not cancel in-flight handler tasks. If adding cooperative cancellation, add it explicitly; do not assume it exists.
-- **Deprecated API:** `XPCConnection.sendOnewayMessage(message:name:)` (argument order reversed) is deprecated in favor of `sendOnewayMessage(name:message:)`. New call sites should use the named-first form.
+- **No Foundation in library sources.** `Sources/SwiftyXPC/` imports `XPC`, `Security`, `System`, `Darwin`, `Dispatch`, `os`, `Synchronization`. Adding `import Foundation` to the library target reverses a deliberate design choice; put Foundation-dependent helpers in an extension target or in clients instead.
+- **`@unchecked Sendable` on `XPCConnection`, `XPCEndpoint`, and `XPCMessageContext`** is load-bearing — they hold XPC objects whose thread-safety is guaranteed by libxpc, not the Swift compiler. All their other state is immutable or behind `LockedState`. Do not add unlocked mutable state.
+- **Unpublished libxpc functions** are declared with `@_silgen_name` only in `Sources/SwiftyXPC/Internal/PrivateXPCInterfaces.swift`, each with its source and the systems it was checked on. Such a declaration is a hard undefined symbol: a function missing from macOS 12's libxpc would stop every client from launching, so check the macOS 12 shared cache (`/Volumes/DyldSharedCaches/macOS/12.0.1`) before adding one.
+- **Message handler task lifetime.** There is no cancellation propagation from the remote side — a cancelled connection does not cancel in-flight handler tasks, and cancelling a task that awaits `sendMessage` does not cancel the XPC message. If adding cooperative cancellation, add it explicitly; do not assume it exists.
+- **Removed API:** `XPCConnection.sendOnewayMessage(message:name:)` is gone, and `sendOnewayMessage(name:message:)` requires a name: a message without one cannot be routed.
 - **`SwiftyXPC/Extensions/` at the repo root (not under `Sources/`) is empty** and exists only because the Xcode project references it. The SPM-visible extension lives at `Sources/SwiftyXPC/Extensions/String+SwiftyXPC.swift`.
 - **The example app is a separate Xcode project** at `Example App/Example App.xcodeproj` with its own embedded XPC service target. It's not built by `swift build` and uses a different bundle ID (`com.charlessoft.SwiftyXPC.Example-App.xpc`) from the test helper.
 

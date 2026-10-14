@@ -720,14 +720,18 @@ public final class XPCDecoder {
     ///   - type: The expected type of the decoded object.
     ///   - xpcObject: The XPC object to decode.
     ///
-    /// - Returns: The decoded value.
+    /// - Returns: The decoded value, as a `sending` value that the caller may hand to another isolation domain.
     ///
     /// - Throws: Any errors that come up in the process of decoding the XPC object.
-    public func decode<T: Decodable>(type: T.Type, from xpcObject: xpc_object_t) throws -> T {
+    public func decode<T: Decodable>(type: T.Type, from xpcObject: xpc_object_t) throws -> sending T {
         let decoder = _XPCDecoder(xpc: xpcObject, codingPath: [])
         let container = decoder.singleValueContainer()
 
-        return try container.decode(type)
+        // The value is built from scratch out of the object's contents. All it can share with `xpcObject` are XPC
+        // objects such as endpoints, which are immutable and safe to use from any thread, so nothing that can race
+        // stays behind with the caller.
+        nonisolated(unsafe) let value = try container.decode(type)
+        return value
     }
 }
 #endif

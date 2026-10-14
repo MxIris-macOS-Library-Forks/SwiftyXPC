@@ -34,19 +34,19 @@ final class XPCService: Sendable {
         }
     }
 
-    private func reportIDs(connection: XPCConnection) async throws -> ProcessIDs {
-        try ProcessIDs(connection: connection)
+    private func reportIDs(context: XPCMessageContext) async throws -> ProcessIDs {
+        try ProcessIDs(connection: context.connection)
     }
 
-    private func capitalizeString(_: XPCConnection, string: String) async throws -> String {
+    private func capitalizeString(_: XPCMessageContext, string: String) async throws -> String {
         string.uppercased()
     }
 
-    private func multiplyBy5(_: XPCConnection, number: Double) async throws -> Double {
+    private func multiplyBy5(_: XPCMessageContext, number: Double) async throws -> Double {
         number * 5.0
     }
 
-    private func transportData(_: XPCConnection, data: Data) async throws -> DataInfo {
+    private func transportData(_: XPCMessageContext, data: Data) async throws -> DataInfo {
         guard String(data: data, encoding: .utf8) == "One to beam up" else {
             throw DataInfo.DataError(failureReason: "fluctuation in the positronic matrix")
         }
@@ -65,7 +65,7 @@ final class XPCService: Sendable {
         )
     }
 
-    private func tellAJoke(_: XPCConnection, endpoint: SwiftyXPC.XPCEndpoint) async throws {
+    private func tellAJoke(_: XPCMessageContext, endpoint: SwiftyXPC.XPCEndpoint) async throws {
         let remoteConnection = try XPCConnection(
             type: .remoteServiceFromEndpoint(endpoint),
             codeSigningRequirement: nil
@@ -86,7 +86,7 @@ final class XPCService: Sendable {
         try remoteConnection.sendOnewayMessage(name: JokeMessage.groan, message: "That was awful!")
     }
 
-    private func pauseOneSecond(_: XPCConnection) async throws {
+    private func pauseOneSecond(_: XPCMessageContext) async throws {
         try await Task.sleep(for: .seconds(1))
     }
 }

@@ -82,10 +82,12 @@ struct SwiftyXPCTests {
 
         let events = Recorder<String>()
         let errors = Recorder<String>()
+        let senderProcessIdentifiers = Recorder<pid_t>()
 
-        listener.setMessageHandler(name: JokeMessage.askForJoke) { (_, request: String) -> String in
+        listener.setMessageHandler(name: JokeMessage.askForJoke) { (context, request: String) -> String in
             #expect(request == "Tell me a joke")
             events.record(JokeMessage.askForJoke)
+            senderProcessIdentifiers.record(context.processIdentifier)
             return "Knock knock"
         }
 
@@ -123,6 +125,10 @@ struct SwiftyXPCTests {
         #expect(try await events.waitUntil(count: 4))
         #expect(events.values == [JokeMessage.askForJoke, JokeMessage.whosThere, JokeMessage.who, JokeMessage.groan])
         #expect(errors.values.isEmpty)
+
+        // The joke came from the helper, which reports its own process identifier.
+        let helperIDs: ProcessIDs = try await conn.sendMessage(name: CommandSet.reportIDs)
+        #expect(senderProcessIdentifiers.values == [helperIDs.pid])
     }
 
     @Test func `Two-way communication with error`() async throws {
