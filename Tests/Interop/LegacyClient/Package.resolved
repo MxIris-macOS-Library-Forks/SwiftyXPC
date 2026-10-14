@@ -1,0 +1,15 @@
+{
+  "originHash" : "79bb8b9e49df76697d52693411ed944103a209694f0186e22b2ff1850e0905be",
+  "pins" : [
+    {
+      "identity" : "swiftyxpc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MxIris-macOS-Library-Forks/SwiftyXPC",
+      "state" : {
+        "revision" : "7cd9e0944fde324d08832b7737a4b4470e2cde43",
+        "version" : "0.5.105"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -47,7 +47,16 @@ public class XPCConnection: @unchecked Sendable {
         static let name = "com.charlessoft.SwiftyXPC.XPCEventHandler.Name"
         static let body = "com.charlessoft.SwiftyXPC.XPCEventHandler.Body"
         static let error = "com.charlessoft.SwiftyXPC.XPCEventHandler.Error"
+
+        /// The version of the message format, on every message and reply that SwiftyXPC 1.0 or later sends.
+        ///
+        /// Receivers do not require it — SwiftyXPC 0.5 never sends it — and nothing depends on its value yet; it is
+        /// there so that a future change to the format can tell which peers understand it.
+        static let protocolVersion = "com.charlessoft.SwiftyXPC.XPCEventHandler.ProtocolVersion"
     }
+
+    /// The message format version this library speaks.
+    private static let protocolVersion: Int64 = 1
 
     /// Represents the various types of connection that can be created.
     public enum ConnectionType: Sendable {
@@ -498,6 +507,7 @@ public class XPCConnection: @unchecked Sendable {
     private func makeMessage(name: String, body: xpc_object_t) -> xpc_object_t {
         let message = xpc_dictionary_create(nil, nil, 0)
 
+        xpc_dictionary_set_int64(message, MessageKeys.protocolVersion, Self.protocolVersion)
         xpc_dictionary_set_string(message, MessageKeys.name, name)
         xpc_dictionary_set_value(message, MessageKeys.body, body)
 
@@ -564,6 +574,12 @@ public class XPCConnection: @unchecked Sendable {
 
         let reply = xpc_dictionary_create_reply(message)
 
+        if reply == nil, Self.isStrayAnswerFromVersion05(message) {
+            // SwiftyXPC 0.5 answers every one-way message with a nameless message carrying its handler's return value.
+            // It tells this side nothing, and reporting it as `missingMessageName` would only confuse.
+            return
+        }
+
         let messageName: String
         let handler: MessageHandler
 
@@ -609,6 +625,16 @@ public class XPCConnection: @unchecked Sendable {
         )
     }
 
+    /// Returns whether `message` is the answer that a SwiftyXPC 0.5 peer sends back for a one-way message.
+    ///
+    /// Such an answer has a body but neither a name nor a protocol version, and arrives without a reply context. This
+    /// library never sends a message without a name, so nothing else looks like it.
+    private static func isStrayAnswerFromVersion05(_ message: xpc_object_t) -> Bool {
+        xpc_dictionary_get_value(message, MessageKeys.name) == nil
+            && xpc_dictionary_get_value(message, MessageKeys.protocolVersion) == nil
+            && xpc_dictionary_get_value(message, MessageKeys.body) != nil
+    }
+
     /// Answers a message with `result`, if its sender is waiting for a reply.
     ///
     /// A one-way message gets no answer at all. If `reportingUnansweredFailure` is `true`, an error that therefore
@@ -625,6 +651,8 @@ public class XPCConnection: @unchecked Sendable {
 
             return
         }
+
+        xpc_dictionary_set_int64(reply, MessageKeys.protocolVersion, Self.protocolVersion)
 
         switch result {
         case .success(let body):

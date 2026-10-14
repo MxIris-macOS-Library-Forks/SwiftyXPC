@@ -52,6 +52,9 @@ The public surface is `XPCConnection` and `XPCListener`. Both expose `setMessage
 - `MessageKeys.name` — the handler name string
 - `MessageKeys.body` — the `XPCEncoder`-encoded request (or response)
 - `MessageKeys.error` — a `BoxedError` payload when the handler threw
+- `MessageKeys.protocolVersion` — `int64` 1 on every message and reply that 1.0 sends; never required on receipt
+
+**The wire format is a contract with SwiftyXPC 0.5 peers** (helpers are often updated separately from their apps): do not rename keys, change how existing types encode, or rely on the protocol version being present. A nameless, versionless, body-only message without a reply context is the stray answer a 0.5 receiver sends for every one-way message — `receive(_:)` drops it silently; a nameless message with an `error` key is a 0.5 receiver reporting its one-way handler's error and is passed to `errorHandler`. New `XPCError` / `XPCConnection.Error` cases are visible to 0.5 peers, whose decoder traps on a case it does not know — avoid sending new cases to them. `WireCompatibilityTests` pins the format in-process; `Tests/Interop/` has two clients and a README for checking it end to end against a real 0.5.105 build.
 
 The type-erased handler storage is `XPCConnection.MessageHandler`, which captures the concrete `Request`/`Response` types inside a `RawHandler` closure. Handlers live in a `HandlerTable` (locked). When a message arrives, `XPCConnection.handleEvent` hands it to `receive(_:)`, which routes it by name and dispatches a job to the connection's `MessageDispatcher` (below); when the handler finishes, `complete(_:with:reportingUnansweredFailure:)` answers it. Only a message whose sender waits for a reply (`xpc_dictionary_create_reply` returns non-`NULL`) is ever answered:
 

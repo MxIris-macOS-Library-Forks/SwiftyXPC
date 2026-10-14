@@ -89,6 +89,7 @@ enum WireFormat {
     static let nameKey = "com.charlessoft.SwiftyXPC.XPCEventHandler.Name"
     static let bodyKey = "com.charlessoft.SwiftyXPC.XPCEventHandler.Body"
     static let errorKey = "com.charlessoft.SwiftyXPC.XPCEventHandler.Error"
+    static let protocolVersionKey = "com.charlessoft.SwiftyXPC.XPCEventHandler.ProtocolVersion"
 }
 
 /// An XPC object that may cross into another task; XPC objects are safe to share between threads.
