@@ -11,15 +11,11 @@ import System
 
 /// An owned wrapper around a file descriptor, which can be embedded within XPC messages to send file descriptors to other processes.
 ///
-/// This wrapper takes ownership of the file descriptor so the user doesn't need to close it manually.
+/// This wrapper takes ownership of the file descriptor so the user doesn't need to close it manually: the descriptor is
+/// closed when the wrapper is deinitialized.
 ///
-/// This wrapper serves two purposes:
-/// 1. To provide compatibility with macOS 10.15, which does not support the `FileDescriptor` structure.
-/// 2. To ensure that the file descriptor is closed when the message is embedded.
-///
-/// On versions of macOS greater than 11.0, you can also simply use a `FileDescriptor` from the `System` module. However, the `FileDescriptor`
-/// is not owned, so you will need to make sure the file descriptor is not closed in the sender process before the message is embedded
-/// in an XPC message.
+/// You can also embed a `FileDescriptor` from the `System` module. However, a `FileDescriptor` is not owned, so you will
+/// need to make sure the file descriptor is not closed in the sender process before the message is embedded in an XPC message.
 public final class XPCFileDescriptor: Codable {
     internal let fileDescriptor: Int32
 
@@ -31,7 +27,6 @@ public final class XPCFileDescriptor: Codable {
 
     /// Create an `XPCFileDescriptor` from a `FileDescriptor` and take the ownership of it.
     /// The file descriptor will be closed automatically when this instance is deinitialized.
-    @available(macOS 11.0, macCatalyst 14.0, *)
     public init(fileDescriptor: FileDescriptor) {
         self.fileDescriptor = fileDescriptor.rawValue
     }
@@ -41,26 +36,17 @@ public final class XPCFileDescriptor: Codable {
         let fd = Darwin.dup(fileDescriptor)
 
         if fd < 0 {
-            if #available(macOS 11.0, macCatalyst 14.0, *) {
-                throw Errno(rawValue: errno)
-            } else {
-                throw XPCErrorRegistry.BoxedError(domain: "NSPOSIXErrorDomain", code: Int(errno))
-            }
+            throw Errno(rawValue: errno)
         }
 
         return fd
     }
 
     /// Duplicate the file descriptor. The caller is responsible for closing the returned `FileDescriptor`.
-    @available(macOS 11.0, macCatalyst 14.0, *)
     public func duplicate() throws -> FileDescriptor {
-        if #available(macOS 12.0, macCatalyst 15.0, *) {
-            return try FileDescriptor(rawValue: self.fileDescriptor).duplicate()
-        } else {
-            return try FileDescriptor(rawValue: self.dup())
-        }
+        try FileDescriptor(rawValue: self.fileDescriptor).duplicate()
     }
-    
+
     deinit {
         close(self.fileDescriptor)
     }

@@ -1,6 +1,5 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
 import Darwin
-import Security
 import System
 import XPC
 
@@ -32,7 +31,10 @@ public class XPCConnection: @unchecked Sendable {
         case unexpectedMessage
         /// A message contained data of the wrong type.
         case typeMismatch(expected: XPCType, actual: XPCType)
-        /// Only used on macOS versions prior to 12.0.
+        /// A peer failed the code signing check that SwiftyXPC made itself on macOS versions prior to 12.0.
+        ///
+        /// SwiftyXPC no longer runs on those versions, and leaves peer checks to XPC, so this error is never produced.
+        @available(*, deprecated, message: "SwiftyXPC no longer produces this error; XPC checks peers itself on macOS 12 and later.")
         case callerFailedCredentialCheck(OSStatus)
     }
 
@@ -80,11 +82,6 @@ public class XPCConnection: @unchecked Sendable {
 
     private let connection: xpc_connection_t
 
-    // Deliberately not marked `@available(macOS, obsoleted: 12.0)`. At a macOS 12 or later
-    // deployment target the property would be unavailable across the whole supported range, and a
-    // stored property cannot be marked unavailable — it contributes to the type's layout either way.
-    private let codeSigningRequirement: String?
-
     internal static func makeAnonymousListenerConnection(codeSigningRequirement: String?) throws -> XPCConnection {
         try .init(connection: xpc_connection_create(nil, nil), codeSigningRequirement: codeSigningRequirement)
     }
@@ -124,9 +121,8 @@ public class XPCConnection: @unchecked Sendable {
 
     internal init(connection: xpc_connection_t, codeSigningRequirement: String?) throws {
         self.connection = connection
-        self.codeSigningRequirement = codeSigningRequirement
 
-        if #available(macOS 12.0, macCatalyst 15.0, *), let requirement = codeSigningRequirement {
+        if let requirement = codeSigningRequirement {
             guard xpc_connection_set_peer_code_signing_requirement(self.connection, requirement) == 0 else {
                 throw XPCError.invalidCodeSignatureRequirement
             }
@@ -457,19 +453,6 @@ public class XPCConnection: @unchecked Sendable {
     }
 
     private func handleEvent(_ event: xpc_object_t) {
-        if #available(macOS 12.0, macCatalyst 15.0, *) {
-            // On Monterey and later, we are relying on xpc's built-in functionality for checking code signatures instead
-        } else {
-            #if os(macOS)
-            do {
-                try self.checkCallerCredentials(event: event)
-            } catch {
-                self.errorHandler?(self, error)
-                return
-            }
-            #endif
-        }
-
         if let customEventHandler = self.customEventHandler {
             customEventHandler(event)
             return
@@ -493,57 +476,6 @@ public class XPCConnection: @unchecked Sendable {
             return
         }
     }
-    #if os(macOS)
-    // Deliberately not marked `@available(macOS, obsoleted: 12.0)`, for the same reason as
-    // `codeSigningRequirement` above: the `#available(macOS 12.0, ...)` else-branch that calls this
-    // is still checked against the deployment target, so at macOS 12 or later the call would not
-    // compile. The branch remains unreachable there; only the availability attribute is dropped.
-    private func checkCallerCredentials(event: xpc_object_t) throws {
-        guard let requirementString = self.codeSigningRequirement else { return }
-
-        var code: SecCode? = nil
-        var err: OSStatus
-
-        if #available(macOS 11.0, macCatalyst 14.0, *) {
-            err = SecCodeCreateWithXPCMessage(event, [], &code)
-        } else {
-            var keyCB = kCFTypeDictionaryKeyCallBacks
-            var valueCB = kCFTypeDictionaryValueCallBacks
-            let key = kSecGuestAttributePid
-            var pid = Int64(xpc_connection_get_pid(xpc_dictionary_get_remote_connection(event)!))
-            let value = CFNumberCreate(kCFAllocatorDefault, .sInt64Type, &pid)
-            let attributes = CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &keyCB, &valueCB)
-
-            CFDictionarySetValue(
-                attributes,
-                unsafeBitCast(key, to: UnsafeRawPointer.self),
-                unsafeBitCast(value, to: UnsafeRawPointer.self)
-            )
-
-            err = SecCodeCopyGuestWithAttributes(nil, attributes, [], &code)
-        }
-
-        guard err == errSecSuccess else {
-            throw Error.callerFailedCredentialCheck(err)
-        }
-
-        let cfRequirementString = requirementString.withCString {
-            CFStringCreateWithCString(kCFAllocatorDefault, $0, CFStringBuiltInEncodings.UTF8.rawValue)
-        }
-
-        var requirement: SecRequirement? = nil
-        err = SecRequirementCreateWithString(cfRequirementString!, [], &requirement)
-        guard err == errSecSuccess else {
-            throw Error.callerFailedCredentialCheck(err)
-        }
-
-        err = SecCodeCheckValidity(code!, [], requirement)
-        guard err == errSecSuccess else {
-            throw Error.callerFailedCredentialCheck(err)
-        }
-    }
-    #endif
-
     private func respond(to event: xpc_object_t) {
         struct SendableWrapper: @unchecked Sendable {
             let event: xpc_object_t

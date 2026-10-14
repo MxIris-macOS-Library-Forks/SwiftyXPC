@@ -273,7 +273,7 @@ public final class XPCDecoder {
                 try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: xpc)
 
                 return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(xpc)) as! T
-            } else if #available(macOS 11.0, macCatalyst 14.0, *), type == FileDescriptor.self {
+            } else if type == FileDescriptor.self {
                 try checkType(xpcType: XPC_TYPE_FD, swiftType: FileDescriptor.self, xpc: xpc)
 
                 return FileDescriptor(rawValue: xpc_fd_dup(xpc)) as! T
@@ -525,7 +525,7 @@ public final class XPCDecoder {
                 let xpc = try self.readNext(xpcType: XPC_TYPE_FD, swiftType: type)
 
                 return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(xpc)) as! T
-            } else if #available(macOS 11.0, macCatalyst 14.0, *), type == FileDescriptor.self {
+            } else if type == FileDescriptor.self {
                 let xpc = try self.readNext(xpcType: XPC_TYPE_FD, swiftType: type)
 
                 return FileDescriptor(rawValue: xpc_fd_dup(xpc)) as! T
@@ -616,7 +616,7 @@ public final class XPCDecoder {
                 try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: self.xpc)
 
                 return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(self.xpc)) as! T
-            } else if #available(macOS 11.0, macCatalyst 14.0, *), type == FileDescriptor.self {
+            } else if type == FileDescriptor.self {
                 try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: self.xpc)
 
                 return FileDescriptor(rawValue: xpc_fd_dup(self.xpc)) as! T

@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SwiftyXPC is a Swift Concurrency-first wrapper around Apple's `libxpc`. It is a Swift Package (`swift-tools-version:5.7`) that targets macOS 10.15+ / macCatalyst 13+ and links only against `XPC` and `Security` — there is no Foundation dependency in the library target itself. The codebase deliberately avoids Foundation/Objective-C bridging so that code signing verification is done through `libxpc` / Security rather than `NSXPCConnection`.
+SwiftyXPC is a Swift Concurrency-first wrapper around Apple's `libxpc`. It is a Swift Package (`swift-tools-version:6.2`) that targets macOS 12+ / macCatalyst 15+ and links only against `XPC` and `Security` — there is no Foundation dependency in the library target itself. The codebase deliberately avoids Foundation/Objective-C bridging so that code signing verification is done through `libxpc` / Security rather than `NSXPCConnection`.
+
+### Language mode
+
+The test, helper, and shared targets build in the Swift 6 language mode. The library target builds in the Swift 5 mode with every Swift 6 upcoming feature enabled *except* `ImportObjcForwardDeclarations` (see `Package.swift`): with that feature on, Swift 6.4 crashes in IRGen whenever a module that does not import Foundation needs type metadata for an XPC object type (a stored `xpc_object_t`, an array or optional of one handed to generic code, a cast to one). All targets also enable `NonisolatedNonsendingByDefault`. Do not move the library to `.v6` until that compiler crash is fixed; the full Swift 6 data-race checking is already on.
 
 ## Build, Test, Format
 
@@ -16,10 +20,10 @@ swift build 2>&1 | xcsift
 swift test  2>&1 | xcsift
 ```
 
-Run a single test:
+Run a single test (tests use Swift Testing; filter by the test's display name):
 
 ```bash
-swift test --filter SwiftyXPCTests.testSimpleRequestAndResponse 2>&1 | xcsift
+swift test --filter "Simple request and response" 2>&1 | xcsift
 ```
 
 Format:
@@ -32,7 +36,7 @@ swift format --in-place --recursive --configuration .swift-format Sources Tests
 
 ## Test Topology (important)
 
-The test target exercises a real Mach service, not a mock. `Tests/SwiftyXPCTests/HelperLauncher.swift` writes a launchd plist to `/tmp` pointing at the `TestHelper` executable produced by SPM, then invokes `/bin/launchctl load` / `unload` around each test run. Consequences:
+The tests use Swift Testing. Suites that need no other process (`CoderRoundTripTests`, `MessageDeliveryTests`) run against an anonymous listener in the test process. `SwiftyXPCTests` exercises a real Mach service, not a mock: the `LaunchedTestHelper` suite trait in `Tests/SwiftyXPCTests/HelperLauncher.swift` writes a launchd plist to the temporary directory pointing at the `TestHelper` executable produced by SPM, then invokes `/bin/launchctl load` before the suite and `unload` after it. Consequences:
 
 - Tests must run on real macOS with permission to `launchctl load`. They will not pass in a sandbox / CI without launchd privileges.
 - If a test leaves the helper loaded (crash, debugger abort), the next run's `load` fails with "Load failed:" and `HelperLauncher` self-heals by issuing an `unload` first. If that also fails, check `launchctl list | rg SwiftyXPC` and `launchctl unload` the stale plist manually.
@@ -61,12 +65,9 @@ The type-erased handler storage is `XPCConnection.MessageHandler`, which capture
 
 The `isMulti` flag determines whether `setMessageHandler` on the listener writes to `_messageHandlers` (case 1, 2) or forwards to `connection.messageHandlers` (case 3). Getters for `messageHandlers`/`errorHandler` do the same routing. Any new listener-level state must preserve this split.
 
-### Code-signing verification has two code paths
+### Code-signing verification is done by libxpc
 
-- macOS 12+: `xpc_connection_set_peer_code_signing_requirement` is called at connection init. If the requirement string fails to parse, init throws `XPCError.invalidCodeSignatureRequirement`. Runtime verification is handled inside libxpc.
-- macOS 10.15 / 11: `XPCConnection.checkCallerCredentials(event:)` runs on every incoming event. On 11+ it uses `SecCodeCreateWithXPCMessage`; on 10.15 it falls back to building a guest attributes dictionary keyed by PID and calling `SecCodeCopyGuestWithAttributes`. Failures surface as `XPCConnection.Error.callerFailedCredentialCheck(OSStatus)`.
-
-Do not collapse these into one path without preserving both behaviors — the whole reason this library exists instead of `NSXPCConnection` is trustworthy peer code signing across OS versions.
+`xpc_connection_set_peer_code_signing_requirement` is called at connection init. If the requirement string fails to parse, init throws `XPCError.invalidCodeSignatureRequirement`. Runtime verification is handled inside libxpc, which drops requests from peers that fail it and answers a waiting sender with `XPC_ERROR_PEER_CODE_SIGNING_REQUIREMENT` (surfaced as `XPCError.unknown("Peer Forbidden")`). The macOS 10.15 / 11 fallback that checked each message with Security.framework is gone with the macOS 12 deployment floor; `XPCConnection.Error.callerFailedCredentialCheck` remains only as a deprecated case.
 
 ### Error transport via XPCErrorRegistry
 
@@ -76,7 +77,7 @@ Custom error types only round-trip across the wire if **both** sides register th
 XPCErrorRegistry.shared.registerDomain(forErrorType: MyError.self)
 ```
 
-`BoxedError` stores either a `.codable(Error & Codable)` payload (when the domain was registered) or a `.uncodable(code: Int)` fallback that mirrors `NSError` shape without requiring Foundation. The registry itself uses `Mutex` on macOS 15+ and a `DispatchSemaphore`-backed `LegacyWrapper` below that, selected at init time via `#available`. Two error types are pre-registered: `XPCError` and `XPCConnection.Error`.
+`BoxedError` stores either a `.codable(Error & Codable)` payload (when the domain was registered) or a `.uncodable(code: Int)` fallback that mirrors `NSError` shape without requiring Foundation. The registry's domain map lives in a `LockedState` (`Sources/SwiftyXPC/Internal/LockedState.swift`), which uses `Mutex` on macOS 15+ and a heap-allocated `os_unfair_lock` below that. Two error types are pre-registered: `XPCError` and `XPCConnection.Error`.
 
 ### Codable ↔ xpc_object_t encoding
 

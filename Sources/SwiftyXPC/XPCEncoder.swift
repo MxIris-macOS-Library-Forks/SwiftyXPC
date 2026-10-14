@@ -112,8 +112,7 @@ public class XPCEncoder {
         func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
             if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
                 self.encode(xpcValue: xpc, for: key)
-            } else if #available(macOS 11.0, macCatalyst 14.0, *),
-                let fileDescriptor = value as? FileDescriptor,
+            } else if let fileDescriptor = value as? FileDescriptor,
                 let xpc = xpc_fd_create(fileDescriptor.rawValue)
             {
                 self.encode(xpcValue: xpc, for: key)
@@ -306,8 +305,7 @@ public class XPCEncoder {
 
             if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
                 self.encode(xpcValue: xpc)
-            } else if #available(macOS 11.0, macCatalyst 14.0, *),
-                let fileDescriptor = value as? FileDescriptor,
+            } else if let fileDescriptor = value as? FileDescriptor,
                 let xpc = xpc_fd_create(fileDescriptor.rawValue)
             {
                 self.encode(xpcValue: xpc)
@@ -429,8 +427,7 @@ public class XPCEncoder {
         func encode<T: Encodable>(_ value: T) throws {
             if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
                 self.encode(xpcValue: xpc)
-            } else if #available(macOS 11.0, macCatalyst 14.0, *),
-                let fileDescriptor = value as? FileDescriptor,
+            } else if let fileDescriptor = value as? FileDescriptor,
                 let xpc = xpc_fd_create(fileDescriptor.rawValue)
             {
                 self.encode(xpcValue: xpc)

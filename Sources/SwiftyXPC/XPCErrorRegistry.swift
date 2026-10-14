@@ -6,7 +6,6 @@
 //  Created by Charles Srstka on 12/19/21.
 //
 
-import Synchronization
 import XPC
 
 /// A registry which facilitates decoding error types that are sent over an XPC connection.
@@ -48,42 +47,12 @@ public final class XPCErrorRegistry: Sendable {
     /// The shared `XPCErrorRegistry` instance.
     public static let shared = XPCErrorRegistry()
 
-    @available(macOS 15.0, macCatalyst 18.0, *)
-    private final class MutexWrapper: Sendable {
-        let mutex: Mutex<[String: (Error & Codable).Type]>
-        init(dict: [String: (Error & Codable).Type]) { self.mutex = Mutex(dict) }
-    }
-
-    private final class LegacyWrapper: @unchecked Sendable {
-        let sema = DispatchSemaphore(value: 1)
-        var dict: [String: (Error & Codable).Type]
-        init(dict: [String: (Error & Codable).Type]) { self.dict = dict }
-    }
-
-    private let errorDomainMapWrapper: any Sendable = {
-        let errorDomainMap: [String: (Error & Codable).Type] = [
+    private let errorDomainMap = LockedState.make(
+        [
             String(reflecting: XPCError.self): XPCError.self,
             String(reflecting: XPCConnection.Error.self): XPCConnection.Error.self,
-        ]
-
-        if #available(macOS 15.0, macCatalyst 18.0, *) {
-            return MutexWrapper(dict: errorDomainMap)
-        } else {
-            return LegacyWrapper(dict: errorDomainMap)
-        }
-    }()
-
-    private func withLock<T>(closure: (inout [String: (Error & Codable).Type]) throws -> T) rethrows -> T {
-        if #available(macOS 15.0, macCatalyst 18.0, *) {
-            return try (self.errorDomainMapWrapper as! MutexWrapper).mutex.withLock { try closure(&$0) }
-        } else {
-            let wrapper = self.errorDomainMapWrapper as! LegacyWrapper
-            wrapper.sema.wait()
-            defer { wrapper.sema.signal() }
-
-            return try closure(&wrapper.dict)
-        }
-    }
+        ] as [String: any (Error & Codable).Type]
+    )
 
     /// Register an error type.
     ///
@@ -91,13 +60,11 @@ public final class XPCErrorRegistry: Sendable {
     ///   - domain: An `NSError`-style domain string to associate with this error type. In most cases, you will just pass `nil` for this parameter, in which case the default value of `String(reflecting: errorType)` will be used instead.
     ///   - errorType: An error type to register. This type must conform to `Codable`.
     public func registerDomain(_ domain: String? = nil, forErrorType errorType: (Error & Codable).Type) {
-        self.withLock { $0[domain ?? String(reflecting: errorType)] = errorType }
+        self.errorDomainMap.withLock { $0[domain ?? String(reflecting: errorType)] = errorType }
     }
 
     internal func encodeError(_ error: Error, domain: String? = nil) throws -> xpc_object_t {
-        try self.withLock { _ in
-            try XPCEncoder().encode(BoxedError(error: error, domain: domain))
-        }
+        try XPCEncoder().encode(BoxedError(error: error, domain: domain))
     }
 
     internal func decodeError(_ error: xpc_object_t) throws -> Error {
@@ -107,7 +74,7 @@ public final class XPCErrorRegistry: Sendable {
     }
 
     internal func errorType(forDomain domain: String) -> (any (Error & Codable).Type)? {
-        self.withLock { $0[domain] }
+        self.errorDomainMap.withLock { $0[domain] }
     }
 
     /// An error type representing errors for which we have an `NSError`-style domain and code, but do not know the exact error class.
