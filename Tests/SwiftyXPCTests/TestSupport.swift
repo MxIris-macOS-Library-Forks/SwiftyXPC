@@ -55,6 +55,24 @@ extension XPCError {
         return false
     }
 
+    /// Whether this is `.invalidPeerRequirement`.
+    var isInvalidPeerRequirement: Bool {
+        if case .invalidPeerRequirement = self {
+            return true
+        }
+
+        return false
+    }
+
+    /// The reason carried by `.connectionInvalid`; `nil` for every other case or when XPC gave no reason.
+    var invalidationReason: String? {
+        if case .connectionInvalid(let reason) = self {
+            return reason
+        }
+
+        return nil
+    }
+
     /// Whether this is `.connectionInvalid`.
     var isConnectionInvalid: Bool {
         if case .connectionInvalid = self {

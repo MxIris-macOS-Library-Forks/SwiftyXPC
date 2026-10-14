@@ -2,6 +2,7 @@
 import Foundation
 import System
 import Testing
+import XPC
 
 @testable import SwiftyXPC
 import TestShared
@@ -24,12 +25,12 @@ struct SwiftyXPCTests {
     }
 
     @Test func `Code signature verification`() async throws {
-        let goodConn = try self.openConnection(codeSigningRequirement: self.helperCodeSigningRequirement())
+        let goodConn = try self.openConnection(requirement: .codeSigning(self.helperCodeSigningRequirement()))
 
         let response: String = try await goodConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
         #expect(response == "TESTING 1 2 3")
 
-        let badConn = try self.openConnection(codeSigningRequirement: "identifier \"com.apple.true\" and anchor apple")
+        let badConn = try self.openConnection(requirement: .codeSigning("identifier \"com.apple.true\" and anchor apple"))
 
         let verificationError = await #expect(throws: XPCError.self) {
             try await badConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
@@ -37,7 +38,7 @@ struct SwiftyXPCTests {
         #expect(verificationError?.unknownDescription == "Peer Forbidden")
 
         let requirementError = #expect(throws: XPCError.self) {
-            _ = try self.openConnection(codeSigningRequirement: "")
+            _ = try self.openConnection(requirement: .codeSigning(""))
         }
         #expect(requirementError?.isInvalidCodeSignatureRequirement == true)
     }
@@ -78,7 +79,7 @@ struct SwiftyXPCTests {
     @Test func `Two-way communication`() async throws {
         let conn = try self.openConnection()
 
-        let listener = try XPCListener(type: .anonymous, codeSigningRequirement: nil)
+        let listener = try SwiftyXPC.XPCListener(type: .anonymous)
 
         let events = Recorder<String>()
         let errors = Recorder<String>()
@@ -135,7 +136,7 @@ struct SwiftyXPCTests {
         XPCErrorRegistry.shared.registerDomain(forErrorType: JokeMessage.NotAKnockKnockJoke.self)
         let conn = try self.openConnection()
 
-        let listener = try XPCListener(type: .anonymous, codeSigningRequirement: nil)
+        let listener = try SwiftyXPC.XPCListener(type: .anonymous)
         let errors = Recorder<String>()
 
         listener.setMessageHandler(name: JokeMessage.askForJoke) { (_, request: String) -> String in
@@ -185,16 +186,77 @@ struct SwiftyXPCTests {
             _ = try await conn.sendMessage(name: CommandSet.capitalizeString, request: "won't work") as String
         }
         #expect(cancellationError?.isConnectionInvalid == true)
+
+        // XPC words the reason itself ("xpc_connection_cancel()" on macOS 27), so only its presence is checked.
+        #expect(cancellationError?.invalidationReason != nil)
+    }
+
+    @available(macOS 14.4, macCatalyst 17.4, *)
+    @Test func `A peer without a required entitlement is rejected`() async throws {
+        let conn = try self.openConnection(requirement: .hasEntitlement("com.charlessoft.SwiftyXPC.Tests.NoSuchEntitlement"))
+        defer { conn.cancel() }
+
+        let error = await #expect(throws: XPCError.self) {
+            try await conn.sendMessage(name: CommandSet.capitalizeString, request: "rejected")
+        }
+        #expect(error?.unknownDescription == "Peer Forbidden")
+    }
+
+    @available(macOS 14.4, macCatalyst 17.4, *)
+    @Test func `A peer that is not part of the operating system fails a platform requirement`() async throws {
+        let conn = try self.openConnection(requirement: .isPlatformCode())
+        defer { conn.cancel() }
+
+        let error = await #expect(throws: XPCError.self) {
+            try await conn.sendMessage(name: CommandSet.capitalizeString, request: "rejected")
+        }
+        #expect(error?.unknownDescription == "Peer Forbidden")
+    }
+
+    @available(macOS 14.4, macCatalyst 17.4, *)
+    @Test func `A lightweight code requirement admits a matching peer`() async throws {
+        let requirement = xpc_dictionary_create(nil, nil, 0)
+        xpc_dictionary_set_string(requirement, "signing-identifier", try self.helperSigningIdentifier())
+
+        let conn = try self.openConnection(requirement: .lightweightCodeRequirement(requirement))
+        defer { conn.cancel() }
+
+        let response: String = try await conn.sendMessage(name: CommandSet.capitalizeString, request: "admitted")
+        #expect(response == "ADMITTED")
+    }
+
+    @available(macOS 14.4, macCatalyst 17.4, *)
+    @Test func `A lightweight code requirement with an unknown operator is rejected`() throws {
+        let requirement = xpc_dictionary_create(nil, nil, 0)
+        xpc_dictionary_set_int64(requirement, "$frobnicate", 1)
+
+        let error = #expect(throws: XPCError.self) {
+            _ = try self.openConnection(requirement: .lightweightCodeRequirement(requirement))
+        }
+        #expect(error?.isInvalidPeerRequirement == true)
+    }
+
+    @available(macOS 14.4, macCatalyst 17.4, *)
+    @Test func `A lightweight code requirement that is not a dictionary is rejected`() throws {
+        let error = #expect(throws: XPCError.self) {
+            _ = try self.openConnection(requirement: .lightweightCodeRequirement(xpc_int64_create(1)))
+        }
+        #expect(error?.isInvalidPeerRequirement == true)
     }
 
     private func helperCodeSigningRequirement() throws -> String {
         try #require(LaunchedTestHelper.current).codeSigningRequirement
     }
 
-    private func openConnection(codeSigningRequirement: String? = nil) throws -> XPCConnection {
+    private func helperSigningIdentifier() throws -> String {
+        try #require(LaunchedTestHelper.current).signingIdentifier
+    }
+
+    /// Opens a connection to the helper that requires `requirement`, or the helper's designated requirement if `nil`.
+    private func openConnection(requirement: SwiftyXPC.XPCPeerRequirement? = nil) throws -> XPCConnection {
         let conn = try XPCConnection(
             type: .remoteMachService(serviceName: helperID, isPrivilegedHelperTool: false),
-            codeSigningRequirement: codeSigningRequirement ?? self.helperCodeSigningRequirement()
+            requirement: requirement ?? .codeSigning(self.helperCodeSigningRequirement())
         )
         conn.activate()
 

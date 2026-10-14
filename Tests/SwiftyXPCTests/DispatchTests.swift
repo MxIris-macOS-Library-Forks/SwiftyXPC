@@ -36,13 +36,13 @@ struct DispatchTests {
     ) throws -> (listener: SwiftyXPC.XPCListener, connection: XPCConnection) {
         let listener = try SwiftyXPC.XPCListener(
             type: .anonymous,
-            codeSigningRequirement: nil,
+            requirement: nil,
             peerDispatchStrategy: dispatchStrategy
         )
         configure(listener)
         listener.activate()
 
-        let connection = try XPCConnection(type: .remoteServiceFromEndpoint(listener.endpoint), codeSigningRequirement: nil)
+        let connection = try XPCConnection(type: .remoteServiceFromEndpoint(listener.endpoint))
         connection.activate()
 
         return (listener, connection)
@@ -175,12 +175,12 @@ struct DispatchTests {
     ///
     /// XPC treats releasing a connection that was never activated as API misuse.
     @Test func `An unparsable requirement on an endpoint connection throws`() throws {
-        let listener = try SwiftyXPC.XPCListener(type: .anonymous, codeSigningRequirement: nil)
+        let listener = try SwiftyXPC.XPCListener(type: .anonymous)
         listener.activate()
         defer { listener.cancel() }
 
         let error = #expect(throws: XPCError.self) {
-            _ = try XPCConnection(type: .remoteServiceFromEndpoint(listener.endpoint), codeSigningRequirement: "")
+            _ = try XPCConnection(type: .remoteServiceFromEndpoint(listener.endpoint), requirement: .codeSigning(""))
         }
         #expect(error?.isInvalidCodeSignatureRequirement == true)
     }

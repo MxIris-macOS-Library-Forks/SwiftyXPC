@@ -18,7 +18,7 @@ final class XPCService: Sendable {
         do {
             let xpcService = XPCService()
 
-            let listener = try XPCListener(type: .machService(name: helperID), codeSigningRequirement: nil)
+            let listener = try XPCListener(type: .machService(name: helperID))
 
             listener.setMessageHandler(name: CommandSet.reportIDs, handler: xpcService.reportIDs)
             listener.setMessageHandler(name: CommandSet.capitalizeString, handler: xpcService.capitalizeString)
@@ -66,10 +66,7 @@ final class XPCService: Sendable {
     }
 
     private func tellAJoke(_: XPCMessageContext, endpoint: SwiftyXPC.XPCEndpoint) async throws {
-        let remoteConnection = try XPCConnection(
-            type: .remoteServiceFromEndpoint(endpoint),
-            codeSigningRequirement: nil
-        )
+        let remoteConnection = try XPCConnection(type: .remoteServiceFromEndpoint(endpoint))
 
         remoteConnection.activate()
 

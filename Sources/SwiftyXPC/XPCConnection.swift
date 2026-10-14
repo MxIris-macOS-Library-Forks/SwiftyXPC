@@ -5,7 +5,7 @@ import XPC
 
 /// A bidirectional communication channel between two processes.
 ///
-/// Use this class’s `init(type:codeSigningRequirement:)` initializer to connect to an `XPCListener` instance in another process.
+/// Use this class’s `init(type:requirement:)` initializer to connect to an `XPCListener` instance in another process.
 ///
 /// Use the `sendMessage` family of functions to send messages to the remote process, and `setMessageHandler(name:handler:)` to receive them.
 ///
@@ -111,50 +111,65 @@ public class XPCConnection: @unchecked Sendable {
     ///
     /// - Parameters:
     ///   - type: The type of connection to create. See the documentation for `ConnectionType` for possible values.
+    ///   - requirement: An optional requirement that the process on the other end must satisfy. If specified, the
+    ///     connection will reject all messages from processes that do not meet it, and a message that waits for a reply
+    ///     from such a process fails with an error.
+    ///
+    /// - Throws: `XPCError.invalidCodeSignatureRequirement` or `XPCError.invalidPeerRequirement` if XPC rejects
+    ///   `requirement`, or any other error that comes up in the process of initializing the connection.
+    public convenience init(type: ConnectionType, requirement: XPCPeerRequirement? = nil) throws {
+        switch type {
+        case .remoteService(let bundleID):
+            try self.init(connection: xpc_connection_create(bundleID, nil), requirement: requirement)
+        case .remoteServiceFromEndpoint(let endpoint):
+            try self.init(connection: endpoint.makeConnection(), requirement: requirement)
+        case .remoteMachService(serviceName: let name, isPrivilegedHelperTool: let isPrivileged):
+            let flags: Int32 = isPrivileged ? XPC_CONNECTION_MACH_SERVICE_PRIVILEGED : 0
+            try self.init(machServiceName: name, flags: flags, requirement: requirement)
+        }
+    }
+
+    /// Initialize a new `XPCConnection` that checks its peer against a code signing requirement.
+    ///
+    /// - Parameters:
+    ///   - type: The type of connection to create. See the documentation for `ConnectionType` for possible values.
     ///   - requirement: An optional code signing requirement. If specified, the connection will reject all messages from processes that do not meet the specified requirement.
     ///
     /// - Throws: Any errors that come up in the process of initializing the connection.
-    public convenience init(type: ConnectionType, codeSigningRequirement requirement: String? = nil) throws {
-        switch type {
-        case .remoteService(let bundleID):
-            try self.init(connection: xpc_connection_create(bundleID, nil), codeSigningRequirement: requirement)
-        case .remoteServiceFromEndpoint(let endpoint):
-            try self.init(connection: endpoint.makeConnection(), codeSigningRequirement: requirement)
-        case .remoteMachService(serviceName: let name, isPrivilegedHelperTool: let isPrivileged):
-            let flags: Int32 = isPrivileged ? XPC_CONNECTION_MACH_SERVICE_PRIVILEGED : 0
-            try self.init(machServiceName: name, flags: flags, codeSigningRequirement: requirement)
-        }
+    @available(*, deprecated, message: "Use init(type:requirement:) with requirement: .codeSigning(_:) instead.")
+    public convenience init(type: ConnectionType, codeSigningRequirement requirement: String?) throws {
+        try self.init(type: type, requirement: requirement.map { XPCPeerRequirement.codeSigning($0) })
     }
 
     internal convenience init(
         machServiceName: String,
         flags: Int32,
-        codeSigningRequirement: String? = nil,
+        requirement: XPCPeerRequirement? = nil,
         listenerEventHandler: (@Sendable (XPCConnection, xpc_object_t) -> Void)? = nil
     ) throws {
         try self.init(
             connection: xpc_connection_create_mach_service(machServiceName, nil, UInt64(flags)),
-            codeSigningRequirement: codeSigningRequirement,
+            requirement: requirement,
             listenerEventHandler: listenerEventHandler
         )
     }
 
     internal init(
         connection: xpc_connection_t,
-        codeSigningRequirement: String?,
+        requirement: XPCPeerRequirement?,
         listenerHandlers: HandlerTable? = nil,
         listenerEventHandler: (@Sendable (XPCConnection, xpc_object_t) -> Void)? = nil,
         dispatchStrategy: MessageDispatcher.Strategy = .automatic
     ) throws {
-        if let requirement = codeSigningRequirement {
-            guard xpc_connection_set_peer_code_signing_requirement(connection, requirement) == 0 else {
-                // Releasing a connection that was never activated is API misuse, which crashes the process.
-                xpc_connection_set_event_handler(connection) { _ in }
-                xpc_connection_activate(connection)
-                xpc_connection_cancel(connection)
+        do {
+            try requirement?.apply(to: connection)
+        } catch {
+            // Releasing a connection that was never activated is API misuse, which crashes the process.
+            xpc_connection_set_event_handler(connection) { _ in }
+            xpc_connection_activate(connection)
+            xpc_connection_cancel(connection)
 
-                throw XPCError.invalidCodeSignatureRequirement
-            }
+            throw error
         }
 
         self.connection = connection
@@ -475,6 +490,11 @@ public class XPCConnection: @unchecked Sendable {
         xpc_connection_send_barrier(self.connection, barrier)
     }
 
+    /// Converts an XPC error event that this connection delivered, with the reason if XPC invalidated the connection.
+    internal func error(fromEvent event: xpc_object_t) -> XPCError {
+        XPCError(error: event, connection: self.connection)
+    }
+
     private func makeMessage(name: String, body: xpc_object_t) -> xpc_object_t {
         let message = xpc_dictionary_create(nil, nil, 0)
 
@@ -492,7 +512,7 @@ public class XPCConnection: @unchecked Sendable {
         case .dictionary:
             break
         case .error:
-            throw XPCError(error: reply)
+            throw XPCError(error: reply, connection: self.connection)
         default:
             throw Error.typeMismatch(expected: .dictionary, actual: reply.type)
         }
@@ -524,7 +544,7 @@ public class XPCConnection: @unchecked Sendable {
         case .dictionary:
             self.receive(event)
         case .error:
-            self.reportError(XPCError(error: event))
+            self.reportError(self.error(fromEvent: event))
         default:
             self.reportError(Error.typeMismatch(expected: .dictionary, actual: event.type))
         }

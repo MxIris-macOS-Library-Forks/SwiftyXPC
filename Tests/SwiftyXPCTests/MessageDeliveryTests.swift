@@ -33,14 +33,11 @@ struct MessageDeliveryTests {
         let connectionErrors = Recorder<String>()
 
         init(configure: (SwiftyXPC.XPCListener) -> Void) throws {
-            self.listener = try SwiftyXPC.XPCListener(type: .anonymous, codeSigningRequirement: nil)
+            self.listener = try SwiftyXPC.XPCListener(type: .anonymous)
             configure(self.listener)
             self.listener.activate()
 
-            self.connection = try XPCConnection(
-                type: .remoteServiceFromEndpoint(self.listener.endpoint),
-                codeSigningRequirement: nil
-            )
+            self.connection = try XPCConnection(type: .remoteServiceFromEndpoint(self.listener.endpoint))
 
             let connectionErrors = self.connectionErrors
             self.connection.errorHandler = { _, error in

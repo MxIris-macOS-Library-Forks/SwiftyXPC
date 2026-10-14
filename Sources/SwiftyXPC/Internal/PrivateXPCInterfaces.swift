@@ -35,4 +35,133 @@ internal func swiftyxpc_xpc_dictionary_get_audit_token(
     _ message: xpc_object_t,
     _ token: UnsafeMutablePointer<audit_token_t>
 )
+
+// MARK: - Published functions that the SDK hides from Swift
+
+/// The peer requirement functions that macOS 26 added to libxpc.
+///
+/// - Source: `xpc/peer_requirement.h` in the macOS 27.2 SDK. The header marks every function `XPC_SWIFT_NOEXPORT`, which
+///   hides it from Swift; the `XPC` module's own `XPCPeerRequirement` keeps the underlying object private.
+/// - Why `dlsym`: these functions do not exist before macOS 26, and a `@_silgen_name` declaration is a strong reference
+///   that dyld resolves when the library loads, so on an older system no client of this library could launch.
+@available(macOS 26.0, macCatalyst 26.0, *)
+internal enum PeerRequirementFunctions {
+    // `xpc_peer_requirement_t` and `xpc_rich_error_t` are Objective-C objects; they cross as raw pointers. Every
+    // `error_out` argument is `NULL`.
+    private typealias CreateFromOptionalString = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafeMutableRawPointer?
+    ) -> UnsafeMutableRawPointer?
+    private typealias CreateFromStringAndValue = @convention(c) (
+        UnsafePointer<CChar>,
+        UnsafeMutableRawPointer,
+        UnsafeMutableRawPointer?
+    ) -> UnsafeMutableRawPointer?
+    private typealias CreateFromObject = @convention(c) (
+        UnsafeMutableRawPointer,
+        UnsafeMutableRawPointer?
+    ) -> UnsafeMutableRawPointer?
+    private typealias MatchReceivedMessage = @convention(c) (
+        UnsafeMutableRawPointer,
+        UnsafeMutableRawPointer,
+        UnsafeMutableRawPointer?
+    ) -> Bool
+
+    private static func lookUp<Function>(_ name: String, as type: Function.Type) -> Function? {
+        // RTLD_DEFAULT, which is `((void *) -2)` and does not reach Swift as a constant.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else {
+            return nil
+        }
+
+        return unsafeBitCast(symbol, to: type)
+    }
+
+    private static func pointer(to object: xpc_object_t) -> UnsafeMutableRawPointer {
+        Unmanaged.passUnretained(object as AnyObject).toOpaque()
+    }
+
+    /// Creates an `xpc_peer_requirement_t` for `kind`, or returns `nil` if libxpc rejects it.
+    ///
+    /// Code signing requirements have no `xpc_peer_requirement_t` constructor; `kind` must be something else.
+    static func makeRequirement(for kind: XPCPeerRequirement.Kind) -> AnyObject? {
+        let requirement: UnsafeMutableRawPointer?
+
+        switch kind {
+        case .codeSigning:
+            preconditionFailure("libxpc has no peer requirement for a code signing requirement")
+        case .entitlementExists(let entitlement):
+            guard
+                let create = Self.lookUp(
+                    "xpc_peer_requirement_create_entitlement_exists",
+                    as: CreateFromOptionalString.self
+                )
+            else {
+                return nil
+            }
+
+            requirement = entitlement.withCString { create($0, nil) }
+        case .entitlementMatches(let entitlement, let value):
+            guard
+                let create = Self.lookUp(
+                    "xpc_peer_requirement_create_entitlement_matches_value",
+                    as: CreateFromStringAndValue.self
+                )
+            else {
+                return nil
+            }
+
+            requirement = withExtendedLifetime(value) {
+                entitlement.withCString { create($0, Self.pointer(to: value), nil) }
+            }
+        case .teamIdentity(let signingIdentifier), .platformIdentity(let signingIdentifier):
+            let name: String
+
+            if case .teamIdentity = kind {
+                name = "xpc_peer_requirement_create_team_identity"
+            } else {
+                name = "xpc_peer_requirement_create_platform_identity"
+            }
+
+            guard let create = Self.lookUp(name, as: CreateFromOptionalString.self) else {
+                return nil
+            }
+
+            if let signingIdentifier {
+                requirement = signingIdentifier.withCString { create($0, nil) }
+            } else {
+                requirement = create(nil, nil)
+            }
+        case .lightweightCodeRequirement(let lightweightCodeRequirement):
+            guard
+                xpc_get_type(lightweightCodeRequirement) == XPC_TYPE_DICTIONARY,
+                let create = Self.lookUp("xpc_peer_requirement_create_lwcr", as: CreateFromObject.self)
+            else {
+                return nil
+            }
+
+            requirement = withExtendedLifetime(lightweightCodeRequirement) {
+                create(Self.pointer(to: lightweightCodeRequirement), nil)
+            }
+        }
+
+        // The constructors return a retained object.
+        return requirement.map { Unmanaged<AnyObject>.fromOpaque($0).takeRetainedValue() }
+    }
+
+    /// Returns whether the sender of `message`, a dictionary received from a peer, satisfies `requirement`.
+    static func message(_ message: xpc_object_t, satisfies requirement: AnyObject) -> Bool {
+        guard
+            let match = Self.lookUp(
+                "xpc_peer_requirement_match_received_message",
+                as: MatchReceivedMessage.self
+            )
+        else {
+            return false
+        }
+
+        return withExtendedLifetime((message, requirement)) {
+            match(Unmanaged.passUnretained(requirement).toOpaque(), Self.pointer(to: message), nil)
+        }
+    }
+}
 #endif

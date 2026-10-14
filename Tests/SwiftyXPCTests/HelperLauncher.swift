@@ -13,6 +13,7 @@ import Testing
 
 final class HelperLauncher: Sendable {
     let codeSigningRequirement: String
+    let signingIdentifier: String
     private let plistURL: URL
 
     private struct LoadError: Error {}
@@ -23,6 +24,7 @@ final class HelperLauncher: Sendable {
 
         self.plistURL = try Self.writeLaunchdPlist(helperURL: helperURL)
         self.codeSigningRequirement = try Self.getCodeSigningRequirement(url: helperURL)
+        self.signingIdentifier = try Self.getSigningIdentifier(url: helperURL)
     }
 
     func startHelper() throws {
@@ -72,6 +74,22 @@ final class HelperLauncher: Sendable {
         try (plist as NSDictionary).write(to: plistURL)
 
         return plistURL
+    }
+
+    private static func getSigningIdentifier(url: URL) throws -> String {
+        var staticCode: SecStaticCode? = nil
+        var err = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
+        if err != errSecSuccess { throw Errno(rawValue: err) }
+
+        var information: CFDictionary? = nil
+        err = SecCodeCopySigningInformation(staticCode!, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+        if err != errSecSuccess { throw Errno(rawValue: err) }
+
+        guard let identifier = (information as? [String: Any])?[kSecCodeInfoIdentifier as String] as? String else {
+            throw Errno.invalidArgument
+        }
+
+        return identifier
     }
 
     private static func getCodeSigningRequirement(url: URL) throws -> String {

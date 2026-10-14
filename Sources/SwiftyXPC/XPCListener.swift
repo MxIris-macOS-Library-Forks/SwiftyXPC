@@ -14,7 +14,7 @@ import os
 ///
 /// Each XPC service, launchd agent, or launchd daemon typically has at least one `XPCListener` object that listens for connections to a specified service name.
 ///
-/// Create an `XPCListener` via `init(type:codeSigningRequirement:)`.
+/// Create an `XPCListener` via `init(type:requirement:)`.
 ///
 /// Use the `setMessageHandler` family of functions to set up handler functions to receive messages.
 ///
@@ -48,7 +48,7 @@ public final class XPCListener: Sendable {
     /// The message handlers and error handler that every accepted connection uses.
     private let handlers: HandlerTable
 
-    private let codeSigningRequirement: String?
+    private let requirement: XPCPeerRequirement?
     private let peerDispatchStrategy: MessageDispatcher.Strategy
 
     // `xpc_main` takes a C function that can't capture any context, so the `.service` listener is stored globally.
@@ -173,36 +173,52 @@ public final class XPCListener: Sendable {
     ///
     /// - Parameters:
     ///   - type: The type of listener to create. Check the documentation for `ListenerType` for possible values.
+    ///   - requirement: An optional requirement that every connecting process must satisfy. If specified, the
+    ///     listener will reject all messages from processes that do not meet it.
+    ///
+    /// - Throws: `XPCError.invalidCodeSignatureRequirement` or `XPCError.invalidPeerRequirement` if XPC rejects
+    ///   `requirement`, or any other error that comes up in the process of creating the listener.
+    public convenience init(type: ListenerType, requirement: XPCPeerRequirement? = nil) throws {
+        try self.init(type: type, requirement: requirement, peerDispatchStrategy: .automatic)
+    }
+
+    /// Create a new `XPCListener` that checks every connecting process against a code signing requirement.
+    ///
+    /// - Parameters:
+    ///   - type: The type of listener to create. Check the documentation for `ListenerType` for possible values.
     ///   - requirement: An optional code signing requirement. If specified, the listener will reject all messages from processes that do not meet the specified requirement.
     ///
     /// - Throws: Any errors that come up in the process of creating the listener.
+    @available(*, deprecated, message: "Use init(type:requirement:) with requirement: .codeSigning(_:) instead.")
     public convenience init(type: ListenerType, codeSigningRequirement requirement: String?) throws {
-        try self.init(type: type, codeSigningRequirement: requirement, peerDispatchStrategy: .automatic)
+        try self.init(type: type, requirement: requirement.map { XPCPeerRequirement.codeSigning($0) })
     }
 
     internal init(
         type: ListenerType,
-        codeSigningRequirement requirement: String?,
+        requirement: XPCPeerRequirement?,
         peerDispatchStrategy: MessageDispatcher.Strategy
     ) throws {
         let handlers = HandlerTable()
         let acceptConnection = Self.makeConnectionAcceptor(
             handlers: handlers,
-            codeSigningRequirement: requirement,
+            requirement: requirement,
             peerDispatchStrategy: peerDispatchStrategy
         )
 
         self.type = type
         self.handlers = handlers
-        self.codeSigningRequirement = requirement
+        self.requirement = requirement
         self.peerDispatchStrategy = peerDispatchStrategy
 
+        // The requirement goes on the listener's own connection, where XPC applies it to every peer, and on each
+        // accepted connection as well.
         switch type {
         case .anonymous:
             self.backing = .connection(
                 try XPCConnection(
                     connection: xpc_connection_create(nil, nil),
-                    codeSigningRequirement: requirement,
+                    requirement: requirement,
                     listenerEventHandler: acceptConnection
                 )
             )
@@ -213,7 +229,7 @@ public final class XPCListener: Sendable {
                 try XPCConnection(
                     machServiceName: name,
                     flags: XPC_CONNECTION_MACH_SERVICE_LISTENER,
-                    codeSigningRequirement: requirement,
+                    requirement: requirement,
                     listenerEventHandler: acceptConnection
                 )
             )
@@ -229,7 +245,7 @@ public final class XPCListener: Sendable {
     /// It captures the listener's parts rather than the listener, which does not exist yet when its connection is made.
     private static func makeConnectionAcceptor(
         handlers: HandlerTable,
-        codeSigningRequirement: String?,
+        requirement: XPCPeerRequirement?,
         peerDispatchStrategy: MessageDispatcher.Strategy
     ) -> @Sendable (XPCConnection, xpc_object_t) -> Void {
         { listenerConnection, event in
@@ -239,7 +255,7 @@ public final class XPCListener: Sendable {
             // XPCConnection; every other event is a listener-level condition that must be surfaced through
             // `errorHandler`. Trapping here would escalate a routine listener teardown into a process-wide abort.
             guard case .connection = event.type else {
-                handlers.errorHandler?(listenerConnection, XPCError(error: event))
+                handlers.errorHandler?(listenerConnection, listenerConnection.error(fromEvent: event))
                 return
             }
 
@@ -247,7 +263,7 @@ public final class XPCListener: Sendable {
                 try Self.accept(
                     event,
                     handlers: handlers,
-                    codeSigningRequirement: codeSigningRequirement,
+                    requirement: requirement,
                     peerDispatchStrategy: peerDispatchStrategy
                 )
             } catch {
@@ -259,12 +275,12 @@ public final class XPCListener: Sendable {
     private static func accept(
         _ peer: xpc_connection_t,
         handlers: HandlerTable,
-        codeSigningRequirement: String?,
+        requirement: XPCPeerRequirement?,
         peerDispatchStrategy: MessageDispatcher.Strategy
     ) throws {
         let connection = try XPCConnection(
             connection: peer,
-            codeSigningRequirement: codeSigningRequirement,
+            requirement: requirement,
             listenerHandlers: handlers,
             dispatchStrategy: peerDispatchStrategy
         )
@@ -303,7 +319,7 @@ public final class XPCListener: Sendable {
                     try XPCListener.accept(
                         peer,
                         handlers: listener.handlers,
-                        codeSigningRequirement: listener.codeSigningRequirement,
+                        requirement: listener.requirement,
                         peerDispatchStrategy: listener.peerDispatchStrategy
                     )
                 } catch {

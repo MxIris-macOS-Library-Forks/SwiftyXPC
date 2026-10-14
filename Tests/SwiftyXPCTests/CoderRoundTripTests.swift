@@ -317,7 +317,7 @@ struct CoderRoundTripTests {
     /// `XPCEndpoint.encode(to:)` threw unconditionally, relying on the coders to intercept the type before
     /// calling it, which they cannot do once a wrapper sits in between.
     @Test func `An endpoint behind a forwarding wrapper still leads to its listener`() async throws {
-        let listener = try SwiftyXPC.XPCListener(type: .anonymous, codeSigningRequirement: nil)
+        let listener = try SwiftyXPC.XPCListener(type: .anonymous)
         listener.setMessageHandler(name: "ping") { _ in
             "pong"
         }
@@ -327,10 +327,7 @@ struct CoderRoundTripTests {
         let encoded = try XPCEncoder().encode(MessageWithForwardedEndpoint(endpoint: Forwarding(listener.endpoint)))
         let decoded = try XPCDecoder().decode(type: MessageWithForwardedEndpoint.self, from: encoded)
 
-        let connection = try XPCConnection(
-            type: .remoteServiceFromEndpoint(decoded.endpoint.wrapped),
-            codeSigningRequirement: nil
-        )
+        let connection = try XPCConnection(type: .remoteServiceFromEndpoint(decoded.endpoint.wrapped))
         connection.activate()
         defer { connection.cancel() }
 

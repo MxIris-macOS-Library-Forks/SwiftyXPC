@@ -1,5 +1,6 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
 import Darwin
+import Security
 import XPC
 
 /// Information about the message that a handler is processing.
@@ -65,6 +66,65 @@ public struct XPCMessageContext: @unchecked Sendable {
     /// The audit session identifier of the sender, read from `auditToken`.
     public var auditSessionIdentifier: au_asid_t {
         au_asid_t(bitPattern: self.auditToken.val.6)
+    }
+}
+
+extension XPCMessageContext {
+    /// Returns whether the process that sent this message satisfies `requirement`.
+    ///
+    /// The check is made against this message, so it cannot be fooled by a process identifier that a new process has
+    /// taken over. It complements the requirement a connection enforces: use it to accept only some messages from a
+    /// connection that admits a wider group of peers.
+    ///
+    /// - Parameter requirement: The requirement to check.
+    ///
+    /// - Returns: `true` if the sender satisfies `requirement`, and `false` if it does not or cannot be checked.
+    ///
+    /// - Throws: `XPCError.invalidCodeSignatureRequirement` or `XPCError.invalidPeerRequirement` if `requirement` is
+    ///   not valid, or a `BoxedError` in the Security domain if the sender's code cannot be examined.
+    @available(macOS 26.0, macCatalyst 26.0, *)
+    public func senderSatisfies(_ requirement: XPCPeerRequirement) throws -> Bool {
+        if case .codeSigning(let requirementString) = requirement.kind {
+            return try self.senderSatisfies(codeSigningRequirement: requirementString)
+        }
+
+        guard let peerRequirement = PeerRequirementFunctions.makeRequirement(for: requirement.kind) else {
+            throw XPCError.invalidPeerRequirement
+        }
+
+        return PeerRequirementFunctions.message(self.message, satisfies: peerRequirement)
+    }
+
+    /// Checks the sender against a code signing requirement with Security, which has no `xpc_peer_requirement_t` form.
+    private func senderSatisfies(codeSigningRequirement requirementString: String) throws -> Bool {
+        var requirement: SecRequirement?
+        let requirementCreated = requirementString.withCString { cString in
+            CFStringCreateWithCString(kCFAllocatorDefault, cString, CFStringBuiltInEncodings.UTF8.rawValue).map {
+                SecRequirementCreateWithString($0, [], &requirement) == errSecSuccess
+            } ?? false
+        }
+
+        guard requirementCreated, let requirement else {
+            throw XPCError.invalidCodeSignatureRequirement
+        }
+
+        // Identifies the sender by the audit token that the kernel attached to this message.
+        var code: SecCode?
+        let codeStatus = SecCodeCreateWithXPCMessage(self.message, [], &code)
+        guard codeStatus == errSecSuccess, let code else {
+            throw XPCErrorRegistry.BoxedError(domain: "NSOSStatusErrorDomain", code: Int(codeStatus))
+        }
+
+        let validityStatus = SecCodeCheckValidity(code, [], requirement)
+
+        switch validityStatus {
+        case errSecSuccess:
+            return true
+        case errSecCSReqFailed:
+            return false
+        default:
+            throw XPCErrorRegistry.BoxedError(domain: "NSOSStatusErrorDomain", code: Int(validityStatus))
+        }
     }
 }
 #endif
