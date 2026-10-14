@@ -9,7 +9,7 @@
 import XPC
 
 /// Enum representing the type of an XPC object.
-public enum XPCType: Codable, Sendable {
+public enum XPCType: Codable, Hashable, Sendable {
     case activity
     case array
     case bool
@@ -55,6 +55,8 @@ public enum XPCType: Codable, Sendable {
             self = .fileDescriptor
         case XPC_TYPE_NULL:
             self = .null
+        case XPC_TYPE_SHMEM:
+            self = .sharedMemory
         case XPC_TYPE_STRING:
             self = .string
         case XPC_TYPE_INT64:

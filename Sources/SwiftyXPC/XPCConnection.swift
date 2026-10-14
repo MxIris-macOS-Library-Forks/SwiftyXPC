@@ -387,38 +387,47 @@ public class XPCConnection: @unchecked Sendable {
     ///
     /// - Throws: Any communication errors that occur in the process of sending the message.
     public func sendOnewayMessage<Message: Codable>(name: String? = nil, message: Message) throws {
-        try self.sendOnewayRawMessage(name: name, body: XPCEncoder().encode(message), key: MessageKeys.body, asReplyTo: nil)
-    }
-
-    private func sendOnewayError(error: Swift.Error, asReplyTo original: xpc_object_t?) throws {
-        try self.sendOnewayRawMessage(
-            name: nil,
-            body: XPCErrorRegistry.shared.encodeError(error),
-            key: MessageKeys.error,
-            asReplyTo: original
-        )
-    }
-
-    private func sendOnewayRawMessage(
-        name: String?,
-        body: xpc_object_t,
-        key: String,
-        asReplyTo original: xpc_object_t?
-    ) throws {
-        let xpcMessage: xpc_object_t
-        if let original = original, let reply = xpc_dictionary_create_reply(original) {
-            xpcMessage = reply
-        } else {
-            xpcMessage = xpc_dictionary_create(nil, nil, 0)
-        }
+        let xpcMessage = xpc_dictionary_create(nil, nil, 0)
 
         if let name = name {
             xpc_dictionary_set_string(xpcMessage, MessageKeys.name, name)
         }
 
-        xpc_dictionary_set_value(xpcMessage, key, body)
+        xpc_dictionary_set_value(xpcMessage, MessageKeys.body, try XPCEncoder().encode(message))
 
         xpc_connection_send_message(self.connection, xpcMessage)
+    }
+
+    /// Answers `request` with `result`, if the sender of `request` is waiting for a reply.
+    ///
+    /// - Returns: Whether the sender was waiting for a reply. A one-way message has no reply context, and gets none.
+    @discardableResult
+    private func reply(to request: xpc_object_t, with result: Result<xpc_object_t, Swift.Error>) -> Bool {
+        guard let reply = xpc_dictionary_create_reply(request) else {
+            return false
+        }
+
+        switch result {
+        case .success(let body):
+            xpc_dictionary_set_value(reply, MessageKeys.body, body)
+        case .failure(let error):
+            xpc_dictionary_set_value(reply, MessageKeys.error, self.encodeForReply(error))
+        }
+
+        xpc_connection_send_message(self.connection, reply)
+        return true
+    }
+
+    /// Encodes `error` for a reply, falling back to its domain and code if the error itself fails to encode.
+    private func encodeForReply(_ error: Swift.Error) -> xpc_object_t {
+        do {
+            return try XPCErrorRegistry.shared.encodeError(error)
+        } catch let encodingError {
+            // The sender still learns which error it was; this side learns why the details were lost.
+            self.errorHandler?(self, encodingError)
+
+            return XPCErrorRegistry.shared.encodeErrorWithoutPayload(error)
+        }
     }
 
     /// Issues a barrier against the connection's message-send activity.
@@ -499,22 +508,23 @@ public class XPCConnection: @unchecked Sendable {
 
                 messageHandler = _messageHandler
             } catch {
+                // This side learns that it was sent a message it cannot route. A sender that is waiting for a reply
+                // learns why it will not get the one it wanted, instead of seeing the connection as interrupted.
                 self.errorHandler?(self, error)
+                self.reply(to: event, with: .failure(error))
                 return
             }
 
-            let response: xpc_object_t
+            let result: Result<xpc_object_t, Swift.Error>
 
             do {
-                response = try await messageHandler(self, event)
+                result = .success(try await messageHandler(self, event))
             } catch {
-                try self.sendOnewayError(error: error, asReplyTo: event)
-                return
+                result = .failure(error)
             }
 
-            do {
-                try self.sendOnewayRawMessage(name: nil, body: response, key: MessageKeys.body, asReplyTo: event)
-            } catch {
+            if !self.reply(to: event, with: result), case .failure(let error) = result {
+                // Nobody is waiting for the outcome of a one-way message, so its handler's error is reported here.
                 self.errorHandler?(self, error)
             }
         }

@@ -67,6 +67,14 @@ public final class XPCErrorRegistry: Sendable {
         try XPCEncoder().encode(BoxedError(error: error, domain: domain))
     }
 
+    /// Encodes only the domain and code of `error`, for an error whose own encoding failed.
+    internal func encodeErrorWithoutPayload(_ error: Error, domain: String? = nil) -> xpc_object_t {
+        let boxedError = BoxedError(domain: domain ?? error._domain, code: error._code)
+
+        // A domain string and an integer code always encode; the fallback only satisfies the type checker.
+        return (try? XPCEncoder().encode(boxedError)) ?? xpc_dictionary_create(nil, nil, 0)
+    }
+
     internal func decodeError(_ error: xpc_object_t) throws -> Error {
         let boxedError = try XPCDecoder().decode(type: BoxedError.self, from: error)
 
@@ -162,8 +170,10 @@ public final class XPCErrorRegistry: Sendable {
             self.errorDomain = try container.decode(String.self, forKey: .domain)
             let code = try container.decode(Int.self, forKey: .code)
 
+            // A payload that this side cannot decode, such as a case that a newer peer added to the error type, still
+            // arrives as its domain and code.
             if let codableType = XPCErrorRegistry.shared.errorType(forDomain: self.errorDomain),
-                let codableError = try codableType.decodeIfPresent(from: container, key: .encodedError)
+                let codableError = try? codableType.decodeIfPresent(from: container, key: .encodedError)
             {
                 self.storage = .codable(codableError)
             } else {

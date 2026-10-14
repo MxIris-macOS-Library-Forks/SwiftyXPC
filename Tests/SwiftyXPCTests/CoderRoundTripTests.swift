@@ -146,6 +146,145 @@ struct CoderRoundTripTests {
         }
     }
 
+    /// Three bytes read one at a time out of an unkeyed container, the way a hand-written conformance might.
+    struct Color: Codable, Equatable, Sendable {
+        let red: UInt8
+        let green: UInt8
+        let blue: UInt8
+
+        init(red: UInt8, green: UInt8, blue: UInt8) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+
+        init(from decoder: any Decoder) throws {
+            var container = try decoder.unkeyedContainer()
+            self.red = try container.decode(UInt8.self)
+            self.green = try container.decode(UInt8.self)
+            self.blue = try container.decode(UInt8.self)
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.unkeyedContainer()
+            try container.encode(self.red)
+            try container.encode(self.green)
+            try container.encode(self.blue)
+        }
+    }
+
+    /// A shape as an older peer knows it.
+    enum Shape: Codable, Equatable, Sendable {
+        case circle(radius: Double)
+        case square(side: Double)
+    }
+
+    /// The same shape as a newer peer knows it, with a case the older one has never heard of.
+    enum NewerShape: Codable, Equatable, Sendable {
+        case circle(radius: Double)
+        case square(side: Double)
+        case triangle(base: Double, height: Double)
+    }
+
+    /// A base class that encodes its own state and leaves the rest to subclasses.
+    class Vehicle: Codable, @unchecked Sendable {
+        let wheels: Int
+
+        init(wheels: Int) {
+            self.wheels = wheels
+        }
+    }
+
+    /// A subclass that keeps its superclass's state under `superEncoder()`, as `Codable` class hierarchies do.
+    final class Bicycle: Vehicle, @unchecked Sendable {
+        let gears: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case gears
+        }
+
+        init(wheels: Int, gears: Int) {
+            self.gears = gears
+            super.init(wheels: wheels)
+        }
+
+        required init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.gears = try container.decode(Int.self, forKey: .gears)
+            try super.init(from: container.superDecoder())
+        }
+
+        override func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(self.gears, forKey: .gears)
+            try super.encode(to: container.superEncoder())
+        }
+    }
+
+    /// Keeps a nested value under a key of its own choosing through `superEncoder(forKey:)`.
+    struct Labelled: Codable, Equatable, Sendable {
+        let label: String
+        let value: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case label
+            case value
+        }
+
+        init(label: String, value: Int) {
+            self.label = label
+            self.value = value
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.label = try container.decode(String.self, forKey: .label)
+            self.value = try Int(from: container.superDecoder(forKey: .value))
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(self.label, forKey: .label)
+            try self.value.encode(to: container.superEncoder(forKey: .value))
+        }
+    }
+
+    /// An identifier that accepts either a bare string or a keyed form, trying the string first.
+    struct FlexibleIdentifier: Decodable, Equatable, Sendable {
+        let value: String
+
+        private enum CodingKeys: String, CodingKey {
+            case value
+        }
+
+        init(value: String) {
+            self.value = value
+        }
+
+        init(from decoder: any Decoder) throws {
+            if let value = try? decoder.singleValueContainer().decode(String.self) {
+                self.value = value
+            } else {
+                self.value = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .value)
+            }
+        }
+    }
+
+    struct KeyedIdentifier: Encodable {
+        let value: String
+    }
+
+    /// Failures as an older peer knows them.
+    enum OlderFailure: Error, Codable {
+        case timedOut
+    }
+
+    /// The same failures as a newer peer knows them, with a case the older one has never heard of.
+    enum NewerFailure: Error, Codable {
+        case timedOut
+        case quotaExceeded(limit: Int)
+    }
+
     /// Regression test: a file descriptor behind a forwarding wrapper used to travel as a plain number.
     ///
     /// The coders recognized `XPCFileDescriptor` only when a container was handed one directly. Behind a wrapper
@@ -157,22 +296,20 @@ struct CoderRoundTripTests {
 
         let message = MessageWithForwardedDescriptor(descriptor: Forwarding(XPCFileDescriptor(fileDescriptor: fileDescriptor)))
 
-        withKnownIssue("XPCFileDescriptor is only recognized when a container encodes it directly") {
-            let encoded = try XPCEncoder().encode(message)
-            let descriptorObject = try #require(xpc_dictionary_get_value(encoded, "descriptor"))
-            try #require(xpc_get_type(descriptorObject) == XPC_TYPE_FD)
+        let encoded = try XPCEncoder().encode(message)
+        let descriptorObject = try #require(xpc_dictionary_get_value(encoded, "descriptor"))
+        try #require(xpc_get_type(descriptorObject) == XPC_TYPE_FD)
 
-            let decoded = try XPCDecoder().decode(type: MessageWithForwardedDescriptor.self, from: encoded)
-            let decodedDescriptor = decoded.descriptor.wrapped.fileDescriptor
+        let decoded = try XPCDecoder().decode(type: MessageWithForwardedDescriptor.self, from: encoded)
+        let decodedDescriptor = decoded.descriptor.wrapped.fileDescriptor
 
-            var originalStatus = stat()
-            var decodedStatus = stat()
-            try #require(fstat(fileDescriptor, &originalStatus) == 0)
-            try #require(fstat(decodedDescriptor, &decodedStatus) == 0)
+        var originalStatus = stat()
+        var decodedStatus = stat()
+        try #require(fstat(fileDescriptor, &originalStatus) == 0)
+        try #require(fstat(decodedDescriptor, &decodedStatus) == 0)
 
-            #expect(decodedDescriptor != fileDescriptor)
-            #expect(decodedStatus.st_dev == originalStatus.st_dev && decodedStatus.st_ino == originalStatus.st_ino)
-        }
+        #expect(decodedDescriptor != fileDescriptor)
+        #expect(decodedStatus.st_dev == originalStatus.st_dev && decodedStatus.st_ino == originalStatus.st_ino)
     }
 
     /// Regression test: an endpoint behind a forwarding wrapper used to refuse to encode at all.
@@ -187,19 +324,30 @@ struct CoderRoundTripTests {
         listener.activate()
         defer { listener.cancel() }
 
-        await withKnownIssue("XPCEndpoint.encode(to:) always throws") {
-            let encoded = try XPCEncoder().encode(MessageWithForwardedEndpoint(endpoint: Forwarding(listener.endpoint)))
-            let decoded = try XPCDecoder().decode(type: MessageWithForwardedEndpoint.self, from: encoded)
+        let encoded = try XPCEncoder().encode(MessageWithForwardedEndpoint(endpoint: Forwarding(listener.endpoint)))
+        let decoded = try XPCDecoder().decode(type: MessageWithForwardedEndpoint.self, from: encoded)
 
-            let connection = try XPCConnection(
-                type: .remoteServiceFromEndpoint(decoded.endpoint.wrapped),
-                codeSigningRequirement: nil
-            )
-            connection.activate()
-            defer { connection.cancel() }
+        let connection = try XPCConnection(
+            type: .remoteServiceFromEndpoint(decoded.endpoint.wrapped),
+            codeSigningRequirement: nil
+        )
+        connection.activate()
+        defer { connection.cancel() }
 
-            let pong: String = try await connection.sendMessage(name: "ping")
-            #expect(pong == "pong")
+        let pong: String = try await connection.sendMessage(name: "ping")
+        #expect(pong == "pong")
+    }
+
+    /// Values that travel as XPC objects of their own cannot be encoded by other coders.
+    ///
+    /// `XPCFileDescriptor` used to have a synthesized conformance that any coder accepted, writing out a descriptor
+    /// number that means nothing outside this process.
+    @Test func `A file descriptor refuses to be encoded by another encoder`() throws {
+        let fileDescriptor = open("/dev/null", O_RDONLY)
+        try #require(fileDescriptor >= 0)
+
+        #expect(throws: EncodingError.self) {
+            _ = try JSONEncoder().encode([XPCFileDescriptor(fileDescriptor: fileDescriptor)])
         }
     }
 
@@ -210,10 +358,97 @@ struct CoderRoundTripTests {
     @Test func `Optional values in an unkeyed container round-trip`() throws {
         let pair = OptionalPair(first: 1, second: nil)
 
-        withKnownIssue("decodeNil() throws instead of returning false for a value that is not null") {
-            let roundTripped = try self.roundTrip(pair)
-            #expect(roundTripped == pair)
+        #expect(try self.roundTrip(pair) == pair)
+    }
+    /// Regression test: reading one byte too many out of packed byte data used to crash the process.
+    ///
+    /// Consecutive `UInt8` values travel as a single `xpc_data` blob. The byte reader's bounds check let an index
+    /// equal to the count through, so a peer that sent fewer bytes than the receiver expected made the receiver
+    /// trap on an out-of-range subscript instead of failing to decode.
+    @Test func `Reading past the end of packed bytes throws instead of crashing`() throws {
+        let twoBytes = try XPCEncoder().encode([UInt8(1), 2])
+
+        #expect(throws: DecodingError.self) {
+            _ = try XPCDecoder().decode(type: Color.self, from: twoBytes)
         }
+    }
+
+    /// Regression test: a key the receiving type does not know used to crash the process.
+    ///
+    /// `allKeys` stopped at a precondition when a key could not be converted to the container's key type. A
+    /// synthesized conformance for an enum with associated values reads `allKeys` to find the case, so a newer
+    /// peer sending a case an older receiver lacks made the receiver trap instead of failing to decode.
+    @Test func `An enumeration case the receiver does not know throws instead of crashing`() throws {
+        let triangle = try XPCEncoder().encode(NewerShape.triangle(base: 3, height: 4))
+
+        #expect(throws: DecodingError.self) {
+            _ = try XPCDecoder().decode(type: Shape.self, from: triangle)
+        }
+    }
+
+    @Test func `An enumeration case both sides know still decodes`() throws {
+        let square = try XPCEncoder().encode(NewerShape.square(side: 2))
+
+        #expect(try XPCDecoder().decode(type: Shape.self, from: square) == .square(side: 2))
+    }
+    /// Regression test: a value that needs a keyed container but arrives as something else used to crash.
+    ///
+    /// The keyed container did not check that it wrapped a dictionary before `allKeys` handed the object to
+    /// `xpc_dictionary_apply`, which XPC treats as API misuse and traps on.
+    @Test func `A keyed value that arrives as another type throws instead of crashing`() throws {
+        #expect(throws: DecodingError.self) {
+            _ = try XPCDecoder().decode(type: Shape.self, from: xpc_int64_create(7))
+        }
+    }
+
+    /// Regression test: encoding a class hierarchy through `superEncoder()` used to stop at a precondition.
+    @Test func `A class hierarchy encoded through superEncoder round-trips`() throws {
+        let bicycle = Bicycle(wheels: 2, gears: 21)
+
+        let roundTripped = try self.roundTrip(bicycle)
+
+        #expect(roundTripped.wheels == 2)
+        #expect(roundTripped.gears == 21)
+    }
+
+    /// Regression test: `superDecoder(forKey:)` used to read the `super` key instead of the key it was given.
+    @Test func `A value kept under superEncoder(forKey:) round-trips`() throws {
+        let labelled = Labelled(label: "answer", value: 42)
+
+        #expect(try self.roundTrip(labelled) == labelled)
+    }
+    /// Regression test: asking the decoder for a second container used to stop at a precondition.
+    ///
+    /// Trying one representation and falling back to another is a common way to accept several formats.
+    @Test func `A type that asks for a second container decodes`() throws {
+        let encoded = try XPCEncoder().encode(KeyedIdentifier(value: "identifier"))
+
+        #expect(try XPCDecoder().decode(type: FlexibleIdentifier.self, from: encoded) == FlexibleIdentifier(value: "identifier"))
+    }
+
+    /// Regression test: an error case that a newer peer added used to make the whole error undecodable.
+    ///
+    /// Before the coder skipped unknown keys, it trapped; once it threw instead, that error replaced the one the peer
+    /// sent. The error now arrives as its domain and code.
+    @Test func `An error case the receiver does not know arrives as its domain and code`() throws {
+        let domain = "SwiftyXPCTests.CoderRoundTripTests.Failure"
+        XPCErrorRegistry.shared.registerDomain(domain, forErrorType: OlderFailure.self)
+
+        let encoded = try XPCErrorRegistry.shared.encodeError(NewerFailure.quotaExceeded(limit: 3), domain: domain)
+        let decoded = try XPCErrorRegistry.shared.decodeError(encoded)
+
+        let boxedError = try #require(decoded as? XPCErrorRegistry.BoxedError)
+        #expect(boxedError.errorDomain == domain)
+        #expect(boxedError.errorCode == NewerFailure.quotaExceeded(limit: 3)._code)
+    }
+
+    @Test func `An error case both sides know still arrives as itself`() throws {
+        let domain = "SwiftyXPCTests.CoderRoundTripTests.KnownFailure"
+        XPCErrorRegistry.shared.registerDomain(domain, forErrorType: OlderFailure.self)
+
+        let encoded = try XPCErrorRegistry.shared.encodeError(NewerFailure.timedOut, domain: domain)
+
+        #expect(try XPCErrorRegistry.shared.decodeError(encoded) is OlderFailure)
     }
 }
 #endif

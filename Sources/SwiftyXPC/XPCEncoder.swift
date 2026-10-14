@@ -1,6 +1,6 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
 //
-//  XPCDecoder.swift
+//  XPCEncoder.swift
 //
 //  Created by Charles Srstka on 11/2/21.
 //
@@ -15,6 +15,28 @@ private protocol XPCEncodingContainer {
 }
 
 extension XPCEncodingContainer {
+    /// Returns the XPC object that stands for `value` itself, for a value that travels as an XPC object of its own.
+    ///
+    /// - Returns: `nil` for a value that is encoded the ordinary way, through `encode(to:)`.
+    fileprivate func standaloneObject(for value: some Encodable, codingPath: [CodingKey]) throws -> xpc_object_t? {
+        switch value {
+        case let representable as any XPCObjectRepresentable:
+            return try representable.makeXPCObject()
+        case let fileDescriptor as FileDescriptor:
+            guard let object = xpc_fd_create(fileDescriptor.rawValue) else {
+                let description = "Could not put file descriptor \(fileDescriptor.rawValue) in a message: \(Errno(rawValue: errno))"
+                throw EncodingError.invalidValue(
+                    value,
+                    EncodingError.Context(codingPath: codingPath, debugDescription: description)
+                )
+            }
+
+            return object
+        default:
+            return nil
+        }
+    }
+
     fileprivate func encodeNil() -> xpc_object_t { xpc_null_create() }
     fileprivate func encodeBool(_ flag: Bool) -> xpc_object_t { xpc_bool_create(flag) }
     fileprivate func encodeInteger<I: SignedInteger>(_ i: I) -> xpc_object_t { xpc_int64_create(Int64(i)) }
@@ -110,16 +132,8 @@ public class XPCEncoder {
         func encode(_ value: UInt64, forKey key: Key) throws { self.encode(xpcValue: self.encodeInteger(value), for: key) }
 
         func encode<T: Encodable>(_ value: T, forKey key: Key) throws {
-            if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
-                self.encode(xpcValue: xpc, for: key)
-            } else if let fileDescriptor = value as? FileDescriptor,
-                let xpc = xpc_fd_create(fileDescriptor.rawValue)
-            {
-                self.encode(xpcValue: xpc, for: key)
-            } else if let endpoint = value as? XPCEndpoint {
-                self.encode(xpcValue: endpoint.endpoint, for: key)
-            } else if value is XPCNull {
-                self.encode(xpcValue: xpc_null_create(), for: key)
+            if let object = try self.standaloneObject(for: value, codingPath: self.codingPath + [key]) {
+                self.encode(xpcValue: object, for: key)
             } else {
                 let encoder = _XPCEncoder(parentXPC: self.dict, codingPath: self.codingPath + [key])
 
@@ -303,16 +317,8 @@ public class XPCEncoder {
         func encode<T: Encodable>(_ value: T) throws {
             let codingPath = self.nextCodingPath()
 
-            if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
-                self.encode(xpcValue: xpc)
-            } else if let fileDescriptor = value as? FileDescriptor,
-                let xpc = xpc_fd_create(fileDescriptor.rawValue)
-            {
-                self.encode(xpcValue: xpc)
-            } else if let endpoint = value as? XPCEndpoint {
-                self.encode(xpcValue: endpoint.endpoint)
-            } else if value is XPCNull {
-                self.encode(xpcValue: xpc_null_create())
+            if let object = try self.standaloneObject(for: value, codingPath: codingPath) {
+                self.encode(xpcValue: object)
             } else if let byte = value as? Int8 {
                 self.encodeByte(byte)
             } else if let byte = value as? UInt8 {
@@ -425,16 +431,8 @@ public class XPCEncoder {
         func encode(_ value: UInt64) throws { self.encode(xpcValue: self.encodeInteger(value)) }
 
         func encode<T: Encodable>(_ value: T) throws {
-            if let fileDescriptor = value as? XPCFileDescriptor, let xpc = xpc_fd_create(fileDescriptor.fileDescriptor) {
-                self.encode(xpcValue: xpc)
-            } else if let fileDescriptor = value as? FileDescriptor,
-                let xpc = xpc_fd_create(fileDescriptor.rawValue)
-            {
-                self.encode(xpcValue: xpc)
-            } else if let endpoint = value as? XPCEndpoint {
-                self.encode(xpcValue: endpoint.endpoint)
-            } else if value is XPCNull {
-                self.encode(xpcValue: xpc_null_create())
+            if let object = try self.standaloneObject(for: value, codingPath: self.codingPath) {
+                self.encode(xpcValue: object)
             } else {
                 let encoder = _XPCEncoder(parentXPC: nil, codingPath: self.codingPath)
                 try value.encode(to: encoder)
@@ -450,32 +448,23 @@ public class XPCEncoder {
         }
     }
 
-    fileprivate class _XPCEncoder: Encoder {
+    internal final class _XPCEncoder: Encoder {
         let codingPath: [CodingKey]
         var userInfo: [CodingUserInfoKey: Any] { [:] }
-        let original: xpc_object_t?
         private(set) var encodedValue: xpc_object_t? = nil
 
         private let parentXPC: xpc_object_t?
         private var topLevelContainer: XPCEncodingContainer? = nil
 
-        init(parentXPC: xpc_object_t?, codingPath: [CodingKey], replyingTo original: xpc_object_t? = nil) {
+        init(parentXPC: xpc_object_t?, codingPath: [CodingKey]) {
             self.parentXPC = parentXPC
             self.codingPath = codingPath
-            self.original = original
         }
 
         func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> {
             precondition(self.topLevelContainer == nil, "Can only have one top-level container")
 
-            let dict: xpc_object_t
-
-            if let original = self.original, let replyDict = xpc_dictionary_create_reply(original) {
-                dict = replyDict
-            } else {
-                dict = xpc_dictionary_create(nil, nil, 0)
-            }
-
+            let dict = xpc_dictionary_create(nil, nil, 0)
             self.setEncodedValue(value: dict)
 
             let container = KeyedContainer<Key>(wrapping: dict, codingPath: self.codingPath)
@@ -487,7 +476,6 @@ public class XPCEncoder {
 
         func unkeyedContainer() -> UnkeyedEncodingContainer {
             precondition(self.topLevelContainer == nil, "Can only have one top-level container")
-            precondition(self.original == nil, "Message replies must use keyed containers")
 
             let dict = xpc_dictionary_create(nil, nil, 0)
             self.setEncodedValue(value: dict)
@@ -501,13 +489,19 @@ public class XPCEncoder {
 
         func singleValueContainer() -> SingleValueEncodingContainer {
             precondition(self.topLevelContainer == nil, "Can only have one top-level container")
-            precondition(self.original == nil, "Message replies must use keyed containers")
 
             let container = SingleValueContainer(encoder: self)
 
             self.topLevelContainer = container
 
             return container
+        }
+
+        /// Puts `object` at this encoder's position, for a value that travels as an XPC object of its own.
+        func encode(xpcObject object: xpc_object_t) {
+            precondition(self.topLevelContainer == nil && self.encodedValue == nil, "Can only encode one value")
+
+            self.setEncodedValue(value: object)
         }
 
         func setEncodedValue(value: xpc_object_t) {
@@ -518,16 +512,12 @@ public class XPCEncoder {
                     preconditionFailure("No coding key with parent XPC object")
                 }
 
-                if let specialKey = key as? XPCEncoder.Key {
-                    switch specialKey {
-                    case .arrayIndex(let index):
-                        precondition(xpc_get_type(parentXPC) == XPC_TYPE_ARRAY, "Index passed to non-array")
+                if case .arrayIndex(let index)? = key as? XPCEncoder.Key {
+                    precondition(xpc_get_type(parentXPC) == XPC_TYPE_ARRAY, "Index passed to non-array")
 
-                        xpc_array_set_value(parentXPC, index, value)
-                    default:
-                        preconditionFailure("Invalid key '\(specialKey.stringValue)'")
-                    }
+                    xpc_array_set_value(parentXPC, index, value)
                 } else {
+                    // Every other key, including the `super` key of `superEncoder()`, names a dictionary entry.
                     precondition(xpc_get_type(parentXPC) == XPC_TYPE_DICTIONARY, "Key passed to non-dictionary")
 
                     key.stringValue.withCString { xpc_dictionary_set_value(parentXPC, $0, value) }
@@ -555,13 +545,17 @@ public class XPCEncoder {
 
     /// Encode a value to an XPC object.
     ///
+    /// If this encoder was created with a message to reply to, the value must encode as a keyed container, and its
+    /// entries are copied into a reply dictionary for that message.
+    ///
     /// - Parameter value: The value to be encoded.
     ///
     /// - Returns: The encoded value, as an `xpc_object_t`.
     ///
-    /// - Throws: Any errors that come up in the process of encoding the value.
+    /// - Throws: Any errors that come up in the process of encoding the value, or `EncodingError.invalidValue` if a
+    ///   reply was requested but the value does not encode as a keyed container or the message does not expect a reply.
     public func encode<T: Encodable>(_ value: T) throws -> xpc_object_t {
-        let encoder = _XPCEncoder(parentXPC: nil, codingPath: [], replyingTo: self.original)
+        let encoder = _XPCEncoder(parentXPC: nil, codingPath: [])
 
         // Everything has to go through containers so that custom catchers in the container classes will catch things like
         // file descriptors.
@@ -575,7 +569,21 @@ public class XPCEncoder {
             preconditionFailure("XPCEncoder did not set encoded value")
         }
 
-        return encoded
+        guard let original = self.original else {
+            return encoded
+        }
+
+        guard xpc_get_type(encoded) == XPC_TYPE_DICTIONARY, let reply = xpc_dictionary_create_reply(original) else {
+            let description = "A reply must encode as a keyed container, to a message that expects a reply."
+            throw EncodingError.invalidValue(value, EncodingError.Context(codingPath: [], debugDescription: description))
+        }
+
+        xpc_dictionary_apply(encoded) { key, entry in
+            xpc_dictionary_set_value(reply, key, entry)
+            return true
+        }
+
+        return reply
     }
 }
 #endif

@@ -82,7 +82,12 @@ struct UncheckedXPCObject: @unchecked Sendable {
 ///
 /// This bypasses `XPCConnection` entirely, so it can send messages the library itself would never produce.
 func sendRawMessage(_ message: xpc_object_t, to endpoint: SwiftyXPC.XPCEndpoint) async -> xpc_object_t {
-    let connection = xpc_connection_create_from_endpoint(endpoint.endpoint)
+    await sendRawMessage(message, toEndpointObject: endpoint.endpoint)
+}
+
+/// Sends `message` to the listener behind a raw XPC endpoint object and waits for the reply.
+func sendRawMessage(_ message: xpc_object_t, toEndpointObject endpoint: xpc_endpoint_t) async -> xpc_object_t {
+    let connection = xpc_connection_create_from_endpoint(endpoint)
     xpc_connection_set_event_handler(connection) { _ in }
     xpc_connection_activate(connection)
     defer { xpc_connection_cancel(connection) }
@@ -94,5 +99,42 @@ func sendRawMessage(_ message: xpc_object_t, to endpoint: SwiftyXPC.XPCEndpoint)
     }
 
     return reply.object
+}
+/// An anonymous listener built directly on the XPC C API, standing in for a peer that does not use this library.
+final class RawListener: Sendable {
+    private let listener: UncheckedXPCObject
+
+    /// The endpoint that connects to this listener.
+    var endpoint: xpc_endpoint_t {
+        xpc_endpoint_create(self.listener.object)
+    }
+
+    /// Creates a listener that hands every dictionary it receives to `handleMessage`, with the connection it came on.
+    init(handleMessage: @escaping @Sendable (_ message: xpc_object_t, _ peer: xpc_connection_t) -> Void) {
+        let listener = xpc_connection_create(nil, nil)
+
+        xpc_connection_set_event_handler(listener) { peer in
+            guard xpc_get_type(peer) == XPC_TYPE_CONNECTION else {
+                return
+            }
+
+            let uncheckedPeer = UncheckedXPCObject(object: peer)
+
+            xpc_connection_set_event_handler(peer) { message in
+                if xpc_get_type(message) == XPC_TYPE_DICTIONARY {
+                    handleMessage(message, uncheckedPeer.object)
+                }
+            }
+
+            xpc_connection_activate(peer)
+        }
+
+        xpc_connection_activate(listener)
+        self.listener = UncheckedXPCObject(object: listener)
+    }
+
+    deinit {
+        xpc_connection_cancel(self.listener.object)
+    }
 }
 #endif

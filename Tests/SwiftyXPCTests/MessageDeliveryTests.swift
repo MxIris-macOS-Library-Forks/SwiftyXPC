@@ -83,9 +83,7 @@ struct MessageDeliveryTests {
         #expect(pong == "pong")
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        withKnownIssue("The receiver answers a one-way message with a message that has no name") {
-            #expect(pair.connectionErrors.values.isEmpty)
-        }
+        #expect(pair.connectionErrors.values.isEmpty)
     }
 
     /// Regression test: a message nobody handled used to leave its sender with a misleading error.
@@ -95,12 +93,10 @@ struct MessageDeliveryTests {
     @Test func `A message nobody handles is answered with unexpectedMessage`() async throws {
         let pair = try Pair { _ in }
 
-        await withKnownIssue("The receiver does not reply, so XPC reports the connection as interrupted") {
-            let error = await #expect(throws: XPCConnection.Error.self) {
-                try await pair.connection.sendMessage(name: "no such message")
-            }
-            #expect(error?.isUnexpectedMessage == true)
+        let error = await #expect(throws: XPCConnection.Error.self) {
+            try await pair.connection.sendMessage(name: "no such message")
         }
+        #expect(error?.isUnexpectedMessage == true)
     }
 
     /// Regression test: a message without a name used to go unanswered, for the same reason as an unknown name.
@@ -112,12 +108,10 @@ struct MessageDeliveryTests {
 
         let reply = await sendRawMessage(message, to: pair.listener.endpoint)
 
-        withKnownIssue("The receiver does not reply, so XPC reports the connection as interrupted") {
-            try #require(xpc_get_type(reply) == XPC_TYPE_DICTIONARY)
-            let encodedError = try #require(xpc_dictionary_get_value(reply, WireFormat.errorKey))
-            let error = try XPCErrorRegistry.shared.decodeError(encodedError)
-            #expect((error as? XPCConnection.Error)?.isMissingMessageName == true)
-        }
+        try #require(xpc_get_type(reply) == XPC_TYPE_DICTIONARY)
+        let encodedError = try #require(xpc_dictionary_get_value(reply, WireFormat.errorKey))
+        let error = try XPCErrorRegistry.shared.decodeError(encodedError)
+        #expect((error as? XPCConnection.Error)?.isMissingMessageName == true)
     }
 
     /// Regression test: an error that could not be encoded used to vanish.
@@ -131,12 +125,76 @@ struct MessageDeliveryTests {
             }
         }
 
-        await withKnownIssue("Encoding the error throws inside an unstructured task and is lost") {
-            let error = await #expect(throws: XPCErrorRegistry.BoxedError.self) {
-                try await pair.connection.sendMessage(name: "fail")
-            }
-            #expect(error?.errorDomain == String(reflecting: UnencodableError.self))
+        let error = await #expect(throws: XPCErrorRegistry.BoxedError.self) {
+            try await pair.connection.sendMessage(name: "fail")
         }
+        #expect(error?.errorDomain == String(reflecting: UnencodableError.self))
+    }
+    /// Nobody waits for the outcome of a one-way message, so its handler's error is reported where it happened.
+    @Test func `A one-way message's handler error is reported on the receiving side`() async throws {
+        let receiverErrors = Recorder<String>()
+
+        let pair = try Pair { listener in
+            listener.setMessageHandler(name: "note") { (_, _: String) in
+                throw UnencodableError()
+            }
+
+            listener.setMessageHandler(name: "ping") { _ in
+                "pong"
+            }
+
+            listener.errorHandler = { _, error in
+                receiverErrors.record(String(describing: error))
+            }
+        }
+
+        try pair.connection.sendOnewayMessage(name: "note", message: "hello")
+        #expect(try await receiverErrors.waitUntil(count: 1))
+
+        let pong: String = try await pair.connection.sendMessage(name: "ping")
+        #expect(pong == "pong")
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(receiverErrors.values == [String(describing: UnencodableError())])
+        #expect(pair.connectionErrors.values.isEmpty)
+    }
+
+    /// The details of an error that fails to encode are lost to the sender, so the receiver hears why.
+    @Test func `An error that cannot be encoded is reported on the receiving side`() async throws {
+        let receiverErrors = Recorder<String>()
+
+        let pair = try Pair { listener in
+            listener.setMessageHandler(name: "fail") { _ in
+                throw UnencodableError()
+            }
+
+            listener.errorHandler = { _, error in
+                receiverErrors.record(String(describing: type(of: error)))
+            }
+        }
+
+        await #expect(throws: XPCErrorRegistry.BoxedError.self) {
+            try await pair.connection.sendMessage(name: "fail")
+        }
+
+        #expect(try await receiverErrors.waitUntil(count: 1))
+        #expect(receiverErrors.values == [String(describing: EncodingError.self)])
+    }
+
+    /// Regression test: `XPCEncoder(replyingTo:)` used to stop at a precondition, whatever it was asked to encode.
+    @Test func `A reply encoded by XPCEncoder(replyingTo:) reaches its sender`() async throws {
+        let listener = RawListener { message, peer in
+            guard let reply = try? XPCEncoder(replyingTo: message).encode(CoderRoundTripTests.KeyedIdentifier(value: "reply")) else {
+                return
+            }
+
+            xpc_connection_send_message(peer, reply)
+        }
+
+        let reply = await sendRawMessage(xpc_dictionary_create(nil, nil, 0), toEndpointObject: listener.endpoint)
+
+        try #require(xpc_get_type(reply) == XPC_TYPE_DICTIONARY)
+        #expect(try XPCDecoder().decode(type: CoderRoundTripTests.FlexibleIdentifier.self, from: reply).value == "reply")
     }
 }
 

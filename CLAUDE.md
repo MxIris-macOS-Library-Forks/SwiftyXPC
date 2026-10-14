@@ -53,7 +53,11 @@ The public surface is `XPCConnection` and `XPCListener`. Both expose `setMessage
 - `MessageKeys.body` — the `XPCEncoder`-encoded request (or response)
 - `MessageKeys.error` — a `BoxedError` payload when the handler threw
 
-The type-erased handler storage is `XPCConnection.MessageHandler`, which captures the concrete `Request`/`Response` types inside a `RawHandler` closure. When a message arrives, `XPCConnection.handleEvent` dispatches through `respond(to:)`, which spins a `Task` to call the handler, then calls `sendOnewayRawMessage(...)` to reply. Errors thrown from the handler are funneled through `XPCErrorRegistry.shared.encodeError(_:)` and sent on the reply dictionary.
+The type-erased handler storage is `XPCConnection.MessageHandler`, which captures the concrete `Request`/`Response` types inside a `RawHandler` closure. When a message arrives, `XPCConnection.handleEvent` dispatches through `respond(to:)`, which spins a `Task` to call the handler, then calls `reply(to:with:)`. Only a message whose sender waits for a reply (`xpc_dictionary_create_reply` returns non-`NULL`) is ever answered:
+
+- a handler's result or error goes back on the reply dictionary; errors are funneled through `XPCErrorRegistry.shared.encodeError(_:)`, and an error that fails to encode is sent as its domain and code alone while the encoding failure goes to this side's `errorHandler`;
+- a message with no name, or no handler for its name, is answered with `XPCConnection.Error.missingMessageName` / `.unexpectedMessage` (and also reported to this side's `errorHandler`), so the sender never mistakes it for `connectionInterrupted`;
+- a one-way message is never answered; its handler's error goes to this side's `errorHandler`. Never send anything "back" for a one-way message: the old code did, as a nameless message the sender could only report as `missingMessageName`.
 
 ### XPCListener has three backings — know which one you're dealing with
 
@@ -81,12 +85,13 @@ XPCErrorRegistry.shared.registerDomain(forErrorType: MyError.self)
 
 ### Codable ↔ xpc_object_t encoding
 
-`XPCEncoder`/`XPCDecoder` (roughly 24k / 30k lines of generated-ish container code) bridge Swift `Codable` to the XPC type system (`XPC_TYPE_INT64`, `XPC_TYPE_UINT64`, `XPC_TYPE_DOUBLE`, `XPC_TYPE_STRING`, `XPC_TYPE_ARRAY`, `XPC_TYPE_DICTIONARY`, `XPC_TYPE_NULL`, `XPC_TYPE_FD`, `XPC_TYPE_UUID`, `XPC_TYPE_DATA`, `XPC_TYPE_DATE`, `XPC_TYPE_ENDPOINT`). Two types have special encode/decode behavior that bypasses the public `Encoder`/`Decoder` protocol:
+`XPCEncoder`/`XPCDecoder` (roughly 24k / 30k lines of generated-ish container code) bridge Swift `Codable` to the XPC type system (`XPC_TYPE_INT64`, `XPC_TYPE_UINT64`, `XPC_TYPE_DOUBLE`, `XPC_TYPE_STRING`, `XPC_TYPE_ARRAY`, `XPC_TYPE_DICTIONARY`, `XPC_TYPE_NULL`, `XPC_TYPE_FD`, `XPC_TYPE_UUID`, `XPC_TYPE_DATA`, `XPC_TYPE_DATE`, `XPC_TYPE_ENDPOINT`). Values that must travel as XPC objects of their own conform to the public `XPCObjectRepresentable` protocol (`XPCEndpoint`, `XPCFileDescriptor`, `XPCNull`):
 
-- `XPCEndpoint` — its `init(from:)` / `encode(to:)` unconditionally throw, so it may only round-trip through `XPCEncoder`/`XPCDecoder`, which detect the type and insert/extract the raw `xpc_endpoint_t`.
-- `XPCFileDescriptor` — owned wrapper that calls `close()` in `deinit`. Avoid copying the raw fd out.
+- The protocol's default `encode(to:)` / `init(from:)` recognize the coders' internal `_XPCEncoder` / `_XPCDecoder` and put / take the raw object, so the value survives any number of wrappers that forward `encode(to:)` (property wrappers do). Any other coder gets an `EncodingError` / `DecodingError` — never a silently encoded descriptor number.
+- The containers also short-circuit `any XPCObjectRepresentable` (and System's `FileDescriptor`, which cannot conform) through `standaloneObject(for:)` / `decodeStandaloneObject(_:xpc:)`; both paths must keep producing the same object.
+- `XPCFileDescriptor` is an owned wrapper that calls `close()` in `deinit`; decoding always `xpc_fd_dup`s. Avoid copying the raw fd out.
 
-When adding new Codable container support, keep both coders symmetric and update `XPCType` if you introduce a new XPC type surface.
+The decoder reads data from other processes, so it must throw, never trap, on anything a peer can send: wrong types (a keyed container checks for a dictionary when it is created), keys the receiving type does not know (`allKeys` skips them — this is how a newer peer's enum case arrives), and reads past the end of packed bytes. A `BoxedError` whose payload cannot be decoded falls back to its domain and code. When adding new Codable container support, keep both coders symmetric and update `XPCType` if you introduce a new XPC type surface.
 
 ### Activation discipline
 

@@ -1,6 +1,6 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
 //
-//  XPCEncoder.swift
+//  XPCDecoder.swift
 //
 //  Created by Charles Srstka on 11/2/21.
 //
@@ -32,6 +32,33 @@ extension XPCDecodingContainer {
 
     fileprivate func decodeNil(xpc: xpc_object_t) throws {
         try self.checkType(xpcType: XPC_TYPE_NULL, swiftType: Any?.self, xpc: xpc)
+    }
+
+    /// Decodes a value that travels as an XPC object of its own, rather than as encoded data.
+    ///
+    /// - Returns: `nil` if values of `type` are decoded the ordinary way, through `init(from:)`.
+    fileprivate func decodeStandaloneObject<T>(_ type: T.Type, xpc: xpc_object_t) throws -> T? {
+        if let representableType = type as? any XPCObjectRepresentable.Type {
+            guard xpc.type == representableType.xpcType else {
+                let description = "Incorrect XPC type; want \(representableType.xpcType.name), got \(xpc.type.name)"
+                throw DecodingError.typeMismatch(type, self.makeErrorContext(description: description))
+            }
+
+            return try representableType.init(xpcObject: xpc) as? T
+        } else if type == FileDescriptor.self {
+            try self.checkType(xpcType: XPC_TYPE_FD, swiftType: type, xpc: xpc)
+
+            let duplicate = xpc_fd_dup(xpc)
+
+            if duplicate < 0 {
+                let description = "Could not duplicate the file descriptor in the message: \(Errno(rawValue: errno))"
+                throw DecodingError.dataCorrupted(self.makeErrorContext(description: description))
+            }
+
+            return FileDescriptor(rawValue: duplicate) as? T
+        } else {
+            return nil
+        }
     }
 
     fileprivate func decodeBool(xpc: xpc_object_t) throws -> Bool {
@@ -91,25 +118,29 @@ public final class XPCDecoder {
         let codingPath: [CodingKey]
         var error: Error? { nil }
 
-        private var checkedType = false
-
         var allKeys: [Key] {
             var keys: [Key] = []
 
             xpc_dictionary_apply(self.dict) { cKey, _ in
-                let stringKey = String(cString: cKey)
-                guard let key = Key(stringValue: stringKey) else {
-                    preconditionFailure("Couldn't convert string '\(stringKey)' into key")
+                // A key this type does not know, such as one that a newer peer added, is not one of its keys.
+                if let key = Key(stringValue: String(cString: cKey)) {
+                    keys.append(key)
                 }
 
-                keys.append(key)
                 return true
             }
 
             return keys
         }
 
-        init(wrapping dict: xpc_object_t, codingPath: [CodingKey]) {
+        init(wrapping dict: xpc_object_t, codingPath: [CodingKey]) throws {
+            guard xpc_get_type(dict) == XPC_TYPE_DICTIONARY else {
+                let description = "Expected a dictionary for a keyed container, got \(dict.type.name)"
+                let context = DecodingError.Context(codingPath: codingPath, debugDescription: description)
+
+                throw DecodingError.typeMismatch([String: Any].self, context)
+            }
+
             self.dict = dict
             self.codingPath = codingPath
         }
@@ -126,19 +157,7 @@ public final class XPCDecoder {
         }
 
         private func getOptionalValue(for key: CodingKey, allowNull: Bool = false) throws -> xpc_object_t? {
-            try key.stringValue.withCString {
-                if !self.checkedType {
-                    guard xpc_get_type(dict) == XPC_TYPE_DICTIONARY else {
-                        let type = String(cString: xpc_type_get_name(xpc_get_type(dict)))
-                        let desc = "Unexpected type for KeyedContainer wrapped object: expected dictionary, got \(type)"
-                        let context = self.makeErrorContext(description: desc)
-
-                        throw DecodingError.typeMismatch([String: Any].self, context)
-                    }
-
-                    self.checkedType = true
-                }
-
+            key.stringValue.withCString {
                 let value = xpc_dictionary_get_value(self.dict, $0)
 
                 if !allowNull, let value = value, case .null = value.type {
@@ -269,22 +288,8 @@ public final class XPCDecoder {
             let xpc = try self.getValue(for: key, allowNull: true)
             let codingPath = self.codingPath + [key]
 
-            if type == XPCFileDescriptor.self {
-                try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: xpc)
-
-                return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(xpc)) as! T
-            } else if type == FileDescriptor.self {
-                try checkType(xpcType: XPC_TYPE_FD, swiftType: FileDescriptor.self, xpc: xpc)
-
-                return FileDescriptor(rawValue: xpc_fd_dup(xpc)) as! T
-            } else if type == XPCEndpoint.self {
-                try checkType(xpcType: XPC_TYPE_ENDPOINT, swiftType: XPCEndpoint.self, xpc: xpc)
-
-                return XPCEndpoint(endpoint: xpc) as! T
-            } else if type == XPCNull.self {
-                try checkType(xpcType: XPC_TYPE_NULL, swiftType: XPCNull.self, xpc: xpc)
-
-                return XPCNull.shared as! T
+            if let value = try self.decodeStandaloneObject(type, xpc: xpc) {
+                return value
             } else {
                 return try _XPCDecoder(xpc: xpc, codingPath: codingPath).decodeTopLevelObject()
             }
@@ -297,7 +302,7 @@ public final class XPCDecoder {
             let value = try self.getValue(for: key)
             let codingPath = self.codingPath + [key]
 
-            return KeyedDecodingContainer(KeyedContainer<NestedKey>(wrapping: value, codingPath: codingPath))
+            return KeyedDecodingContainer(try KeyedContainer<NestedKey>(wrapping: value, codingPath: codingPath))
         }
 
         func nestedUnkeyedContainer(forKey key: Key) throws -> UnkeyedDecodingContainer {
@@ -314,7 +319,7 @@ public final class XPCDecoder {
         }
 
         func superDecoder(forKey key: Key) throws -> Decoder {
-            let xpc = try self.getValue(for: XPCEncoder.Key.super)
+            let xpc = try self.getValue(for: key)
 
             return _XPCDecoder(xpc: xpc, codingPath: self.codingPath + [key])
         }
@@ -408,10 +413,17 @@ public final class XPCDecoder {
             }
         }
 
+        private func endOfContainerError(decoding swiftType: Any.Type) -> DecodingError {
+            DecodingError.valueNotFound(swiftType, self.makeErrorContext(description: "Unkeyed container is at end."))
+        }
+
         private func readNext(xpcType: xpc_type_t?, swiftType: Any.Type) throws -> xpc_object_t {
+            if case .error(let error) = self.storage {
+                throw error
+            }
+
             if self.isAtEnd {
-                let context = self.makeErrorContext(description: "Premature end of array data")
-                throw DecodingError.dataCorrupted(context)
+                throw self.endOfContainerError(decoding: swiftType)
             }
 
             switch self.storage {
@@ -449,9 +461,8 @@ public final class XPCDecoder {
 
         private func decodeByte() throws -> UInt8 {
             if case .data(let bytes) = self.storage {
-                if self.currentIndex > bytes.count {
-                    let context = self.makeErrorContext(description: "Read past end of data buffer")
-                    throw DecodingError.dataCorrupted(context)
+                guard self.currentIndex < bytes.count else {
+                    throw self.endOfContainerError(decoding: UInt8.self)
                 }
 
                 defer { self.currentIndex += 1 }
@@ -467,7 +478,22 @@ public final class XPCDecoder {
         }
 
         func decodeNil() throws -> Bool {
-            _ = try self.readNext(xpcType: XPC_TYPE_NULL, swiftType: Any.self)
+            if case .error(let error) = self.storage {
+                throw error
+            }
+
+            if self.isAtEnd {
+                throw self.endOfContainerError(decoding: Any?.self)
+            }
+
+            // A value that is not null stays where it is, for the decode call that follows.
+            guard case .array(let array) = self.storage,
+                xpc_get_type(xpc_array_get_value(array, self.currentIndex)) == XPC_TYPE_NULL
+            else {
+                return false
+            }
+
+            self.currentIndex += 1
             return true
         }
 
@@ -521,25 +547,13 @@ public final class XPCDecoder {
                 return try self.decode(UInt32.self) as! T
             } else if type == UInt64.self {
                 return try self.decode(UInt64.self) as! T
-            } else if type == XPCFileDescriptor.self {
-                let xpc = try self.readNext(xpcType: XPC_TYPE_FD, swiftType: type)
-
-                return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(xpc)) as! T
-            } else if type == FileDescriptor.self {
-                let xpc = try self.readNext(xpcType: XPC_TYPE_FD, swiftType: type)
-
-                return FileDescriptor(rawValue: xpc_fd_dup(xpc)) as! T
-            } else if type == XPCEndpoint.self {
-                let xpc = try self.readNext(xpcType: XPC_TYPE_ENDPOINT, swiftType: type)
-
-                return XPCEndpoint(endpoint: xpc) as! T
-            } else if type == XPCNull.self {
-                _ = try self.readNext(xpcType: XPC_TYPE_NULL, swiftType: XPCNull.self)
-
-                return XPCNull.shared as! T
             } else {
                 let codingPath = self.nextCodingPath()
                 let xpc = try self.readNext(xpcType: nil, swiftType: type)
+
+                if let value = try self.decodeStandaloneObject(type, xpc: xpc) {
+                    return value
+                }
 
                 return try _XPCDecoder(xpc: xpc, codingPath: codingPath).decodeTopLevelObject()
             }
@@ -551,7 +565,7 @@ public final class XPCDecoder {
             let codingPath = self.nextCodingPath()
             let xpc = try self.readNext(xpcType: nil, swiftType: Any.self)
 
-            return KeyedDecodingContainer(KeyedContainer(wrapping: xpc, codingPath: codingPath))
+            return KeyedDecodingContainer(try KeyedContainer(wrapping: xpc, codingPath: codingPath))
         }
 
         func nestedUnkeyedContainer() throws -> UnkeyedDecodingContainer {
@@ -562,6 +576,10 @@ public final class XPCDecoder {
         }
 
         func superDecoder() throws -> Decoder {
+            if case .error(let error) = self.storage {
+                throw error
+            }
+
             let key = XPCEncoder.Key.super
 
             guard let xpc = xpc_dictionary_get_value(self.dict, key.stringValue) else {
@@ -612,33 +630,19 @@ public final class XPCDecoder {
         func decode(_ type: UInt64.Type) throws -> UInt64 { try self.decodeInteger(xpc: self.xpc) }
 
         func decode<T: Decodable>(_ type: T.Type) throws -> T {
-            if type == XPCFileDescriptor.self {
-                try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: self.xpc)
-
-                return XPCFileDescriptor(fileDescriptor: xpc_fd_dup(self.xpc)) as! T
-            } else if type == FileDescriptor.self {
-                try checkType(xpcType: XPC_TYPE_FD, swiftType: XPCFileDescriptor.self, xpc: self.xpc)
-
-                return FileDescriptor(rawValue: xpc_fd_dup(self.xpc)) as! T
-            } else if type == XPCEndpoint.self {
-                try checkType(xpcType: XPC_TYPE_ENDPOINT, swiftType: type, xpc: self.xpc)
-
-                return XPCEndpoint(endpoint: self.xpc) as! T
-            } else if type == XPCNull.self {
-                try checkType(xpcType: XPC_TYPE_NULL, swiftType: XPCNull.self, xpc: self.xpc)
-
-                return XPCNull.shared as! T
+            if let value = try self.decodeStandaloneObject(type, xpc: self.xpc) {
+                return value
             } else {
                 return try _XPCDecoder(xpc: self.xpc, codingPath: self.codingPath).decodeTopLevelObject()
             }
         }
     }
 
-    private final class _XPCDecoder: Decoder {
+    internal final class _XPCDecoder: Decoder {
         let xpc: xpc_object_t
         let codingPath: [CodingKey]
         var userInfo: [CodingUserInfoKey: Any] { [:] }
-        var topLevelContainer: XPCDecodingContainer? = nil
+        fileprivate var topLevelContainer: XPCDecodingContainer? = nil
 
         init(xpc: xpc_object_t, codingPath: [CodingKey]) {
             self.xpc = xpc
@@ -668,18 +672,17 @@ public final class XPCDecoder {
             return value
         }
 
-        func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedDecodingContainer<Key> {
-            precondition(self.topLevelContainer == nil, "Can only have one top-level container")
+        // A type may ask for more than one container, for instance to try a single value before falling back to a keyed
+        // representation. The most recent container is the one whose deferred error `decodeTopLevelObject()` reports.
 
-            let container = KeyedContainer<Key>(wrapping: self.xpc, codingPath: self.codingPath)
+        func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
+            let container = try KeyedContainer<Key>(wrapping: self.xpc, codingPath: self.codingPath)
             self.topLevelContainer = container
 
             return KeyedDecodingContainer(container)
         }
 
         func unkeyedContainer() -> UnkeyedDecodingContainer {
-            precondition(self.topLevelContainer == nil, "Can only have one top-level container")
-
             let container = UnkeyedContainer(wrapping: self.xpc, codingPath: self.codingPath)
             self.topLevelContainer = container
 
@@ -687,12 +690,24 @@ public final class XPCDecoder {
         }
 
         func singleValueContainer() -> SingleValueDecodingContainer {
-            precondition(self.topLevelContainer == nil, "Can only have one top-level container")
-
             let container = SingleValueContainer(wrapping: self.xpc, codingPath: self.codingPath)
             self.topLevelContainer = container
 
             return container
+        }
+
+        /// Returns the XPC object at this decoder's position, for a value that travels as an XPC object of its own.
+        ///
+        /// - Throws: `DecodingError.typeMismatch` if the object is not of type `expectedType`.
+        func object(ofType expectedType: XPCType, decoding swiftType: Any.Type) throws -> xpc_object_t {
+            guard self.xpc.type == expectedType else {
+                let description = "Incorrect XPC type; want \(expectedType.name), got \(self.xpc.type.name)"
+                let context = DecodingError.Context(codingPath: self.codingPath, debugDescription: description)
+
+                throw DecodingError.typeMismatch(swiftType, context)
+            }
+
+            return self.xpc
         }
     }
 

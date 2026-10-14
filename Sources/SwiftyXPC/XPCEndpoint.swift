@@ -12,14 +12,11 @@ import XPC
 ///
 /// An `XPCEndpoint` can be passed over an active XPC connection, allowing the process on the other end to initialize a new `XPCConnection`
 /// to communicate with it.
-public struct XPCEndpoint: Codable, @unchecked Sendable {
-    private struct CanOnlyBeDecodedByXPCDecoder: Error {
-        var localizedDescription: String { "XPCEndpoint can only be decoded via XPCDecoder." }
-    }
-
-    private struct CanOnlyBeEncodedByXPCEncoder: Error {
-        var localizedDescription: String { "XPCEndpoint can only be encoded via XPCEncoder." }
-    }
+///
+/// An endpoint travels in a message as an XPC endpoint object, so only `XPCEncoder` and `XPCDecoder` can encode and decode it.
+public struct XPCEndpoint: XPCObjectRepresentable, @unchecked Sendable {
+    /// The XPC type of the object that represents an endpoint: `.endpoint`.
+    public static var xpcType: XPCType { .endpoint }
 
     internal let endpoint: xpc_endpoint_t
 
@@ -27,26 +24,26 @@ public struct XPCEndpoint: Codable, @unchecked Sendable {
         self.endpoint = xpc_endpoint_create(connection)
     }
 
-    internal init(endpoint: xpc_endpoint_t) {
-        self.endpoint = endpoint
+    /// Creates an endpoint from an XPC endpoint object.
+    ///
+    /// - Parameter xpcObject: An XPC object of type `XPC_TYPE_ENDPOINT`.
+    ///
+    /// - Throws: `XPCConnection.Error.typeMismatch` if `xpcObject` is not an endpoint.
+    public init(xpcObject: xpc_object_t) throws {
+        guard xpc_get_type(xpcObject) == XPC_TYPE_ENDPOINT else {
+            throw XPCConnection.Error.typeMismatch(expected: .endpoint, actual: xpcObject.type)
+        }
+
+        self.endpoint = xpcObject
+    }
+
+    /// Returns the XPC endpoint object.
+    public func makeXPCObject() -> xpc_object_t {
+        self.endpoint
     }
 
     internal func makeConnection() -> xpc_connection_t {
         xpc_connection_create_from_endpoint(self.endpoint)
-    }
-
-    /// Required method for the purpose of conforming to the `Decodable` protocol.
-    ///
-    /// - Throws: Trying to decode this object from any decoder type other than `XPCDecoder` will result in an error.
-    public init(from decoder: Decoder) throws {
-        throw CanOnlyBeDecodedByXPCDecoder()
-    }
-
-    /// Required method for the purpose of conforming to the `Encodable` protocol.
-    ///
-    /// - Throws: Trying to encode this object from any encoder type other than `XPCEncoder` will result in an error.
-    public func encode(to encoder: Encoder) throws {
-        throw CanOnlyBeEncodedByXPCEncoder()
     }
 }
 #endif
