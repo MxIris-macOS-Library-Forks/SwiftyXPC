@@ -1,37 +1,27 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
-import XCTest
+import Foundation
+import Testing
 
 @testable import SwiftyXPC
 
 /// Round-trip tests for `XPCEncoder` and `XPCDecoder` that need no XPC connection.
 ///
-/// These deliberately do not subclass the helper-launching test case, so they run anywhere.
+/// These deliberately do not use the helper-launching suite trait, so they run anywhere.
 // swift-format-ignore: AllPublicDeclarationsHaveDocumentation
-final class CoderRoundTripTests: XCTestCase {
-    private func assertRoundTrips<Value: Codable & Equatable>(
-        _ value: Value,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws {
-        let encoded = try XPCEncoder().encode(value)
-        let decoded = try XPCDecoder().decode(type: Value.self, from: encoded)
-
-        XCTAssertEqual(decoded, value, file: file, line: line)
-    }
-
-    private struct StructureWithData: Codable, Equatable {
+struct CoderRoundTripTests {
+    struct StructureWithData: Codable, Equatable, Sendable {
         let data: Data
     }
 
-    private struct StructureWithArray: Codable, Equatable {
+    struct StructureWithArray: Codable, Equatable, Sendable {
         let numbers: [Int]
     }
 
-    private struct StructureWithNestedStructure: Codable, Equatable {
+    struct StructureWithNestedStructure: Codable, Equatable, Sendable {
         let inner: StructureWithData
     }
 
-    private enum EnumerationWithPayload: Codable, Equatable {
+    enum EnumerationWithPayload: Codable, Equatable, Sendable {
         case text(String)
         case pair(first: String, second: String)
         case data(Data)
@@ -39,19 +29,29 @@ final class CoderRoundTripTests: XCTestCase {
         case dataAndText(data: Data, text: String)
     }
 
-    private indirect enum NestedEnumeration: Codable, Equatable {
+    indirect enum NestedEnumeration: Codable, Equatable, Sendable {
         case wrap(inner: NestedEnumeration)
         case leaf(data: Data, numbers: [Int])
     }
 
-    private struct StructureWithEnumerationArray: Codable, Equatable {
+    struct StructureWithEnumerationArray: Codable, Equatable, Sendable {
         let items: [NestedEnumeration]
     }
 
-    func testCollectionsAtTheTopLevelOfAStructureRoundTrip() throws {
-        try self.assertRoundTrips(StructureWithData(data: Data([1, 2, 3])))
-        try self.assertRoundTrips(StructureWithArray(numbers: [1, 2, 3]))
-        try self.assertRoundTrips(StructureWithNestedStructure(inner: StructureWithData(data: Data([1, 2, 3]))))
+    private func roundTrip<Value: Codable>(_ value: Value) throws -> Value {
+        let encoded = try XPCEncoder().encode(value)
+        return try XPCDecoder().decode(type: Value.self, from: encoded)
+    }
+
+    @Test func `Collections at the top level of a structure round-trip`() throws {
+        let structureWithData = StructureWithData(data: Data([1, 2, 3]))
+        #expect(try self.roundTrip(structureWithData) == structureWithData)
+
+        let structureWithArray = StructureWithArray(numbers: [1, 2, 3])
+        #expect(try self.roundTrip(structureWithArray) == structureWithArray)
+
+        let structureWithNestedStructure = StructureWithNestedStructure(inner: StructureWithData(data: Data([1, 2, 3])))
+        #expect(try self.roundTrip(structureWithNestedStructure) == structureWithNestedStructure)
     }
 
     /// Regression test: collections carried as an enum's associated values used to be lost.
@@ -62,28 +62,32 @@ final class CoderRoundTripTests: XCTestCase {
     /// and arrays encode — never got its `Contents` key written. Encoding reported success, and the
     /// far end then failed to decode with `NSCocoaErrorDomain` 4864, "The data couldn't be read
     /// because it isn't in the correct format."
-    func testCollectionsCarriedByEnumerationCasesRoundTrip() throws {
-        try self.assertRoundTrips(EnumerationWithPayload.text("hello"))
-        try self.assertRoundTrips(EnumerationWithPayload.pair(first: "first", second: "second"))
-        try self.assertRoundTrips(EnumerationWithPayload.data(Data([1, 2, 3])))
-        try self.assertRoundTrips(EnumerationWithPayload.numbers([1, 2, 3]))
-        try self.assertRoundTrips(EnumerationWithPayload.dataAndText(data: Data([1, 2, 3]), text: "text"))
-        try self.assertRoundTrips(EnumerationWithPayload.data(Data()))
+    @Test(
+        arguments: [
+            EnumerationWithPayload.text("hello"),
+            .pair(first: "first", second: "second"),
+            .data(Data([1, 2, 3])),
+            .numbers([1, 2, 3]),
+            .dataAndText(data: Data([1, 2, 3]), text: "text"),
+            .data(Data()),
+        ]
+    )
+    func `Collections carried by enumeration cases round-trip`(value: EnumerationWithPayload) throws {
+        #expect(try self.roundTrip(value) == value)
     }
 
     /// The same failure at greater depth, which one extra level of descent would still have missed.
-    func testCollectionsNestedSeveralContainersDeepRoundTrip() throws {
-        try self.assertRoundTrips(
-            NestedEnumeration.wrap(inner: .wrap(inner: .leaf(data: Data([9, 8, 7]), numbers: [4, 5])))
+    @Test func `Collections nested several containers deep round-trip`() throws {
+        let nestedEnumeration = NestedEnumeration.wrap(inner: .wrap(inner: .leaf(data: Data([9, 8, 7]), numbers: [4, 5])))
+        #expect(try self.roundTrip(nestedEnumeration) == nestedEnumeration)
+
+        let structureWithEnumerationArray = StructureWithEnumerationArray(
+            items: [
+                .leaf(data: Data([1]), numbers: [2]),
+                .leaf(data: Data([3]), numbers: [4]),
+            ]
         )
-        try self.assertRoundTrips(
-            StructureWithEnumerationArray(
-                items: [
-                    .leaf(data: Data([1]), numbers: [2]),
-                    .leaf(data: Data([3]), numbers: [4]),
-                ]
-            )
-        )
+        #expect(try self.roundTrip(structureWithEnumerationArray) == structureWithEnumerationArray)
     }
 }
 #endif

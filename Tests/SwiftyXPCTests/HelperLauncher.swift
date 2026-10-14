@@ -9,8 +9,9 @@
 import Foundation
 import System
 import TestShared
+import Testing
 
-class HelperLauncher {
+final class HelperLauncher: Sendable {
     let codeSigningRequirement: String
     private let plistURL: URL
 
@@ -35,6 +36,7 @@ class HelperLauncher {
 
     func stopHelper() throws {
         try self.runLaunchctl(verb: "unload")
+        try? FileManager.default.removeItem(at: self.plistURL)
     }
 
     private func runLaunchctl(verb: String) throws {
@@ -87,5 +89,36 @@ class HelperLauncher {
 
         return string! as String
     }
+}
+
+/// Loads the `TestHelper` Mach service into launchd for as long as the suite it is applied to runs.
+struct LaunchedTestHelper: SuiteTrait, TestScoping {
+    /// The launcher for the helper that the running suite talks to.
+    @TaskLocal static var current: HelperLauncher?
+
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void
+    ) async throws {
+        let launcher = try HelperLauncher()
+        try launcher.startHelper()
+
+        do {
+            try await Self.$current.withValue(launcher) {
+                try await function()
+            }
+        } catch {
+            try? launcher.stopHelper()
+            throw error
+        }
+
+        try launcher.stopHelper()
+    }
+}
+
+extension Trait where Self == LaunchedTestHelper {
+    /// Loads the `TestHelper` Mach service into launchd around the suite.
+    static var launchedTestHelper: Self { Self() }
 }
 #endif

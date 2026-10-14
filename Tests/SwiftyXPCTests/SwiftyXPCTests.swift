@@ -1,79 +1,58 @@
 #if os(macOS) || targetEnvironment(macCatalyst)
-import XCTest
+import Foundation
+import System
+import Testing
 
 @testable import SwiftyXPC
-import System
 import TestShared
 
+/// Tests that talk to the `TestHelper` Mach service in another process.
+///
+/// The tests share one helper instance, which `LaunchedTestHelper` loads into launchd for the whole suite.
 // swift-format-ignore: AllPublicDeclarationsHaveDocumentation
-final class SwiftyXPCTests: XCTestCase {
-    var helperLauncher: HelperLauncher?
-
-    override func setUp() async throws {
-        self.helperLauncher = try HelperLauncher()
-        try self.helperLauncher?.startHelper()
-    }
-
-    override func tearDown() async throws {
-        try self.helperLauncher?.stopHelper()
-    }
-
-    func testProcessIDs() async throws {
+@Suite(.serialized, .launchedTestHelper)
+struct SwiftyXPCTests {
+    @Test func `Process IDs`() async throws {
         let conn = try self.openConnection()
 
         let ids: ProcessIDs = try await conn.sendMessage(name: CommandSet.reportIDs)
 
-        XCTAssertEqual(ids.pid, conn.processIdentifier)
-        XCTAssertEqual(ids.effectiveUID, conn.effectiveUserIdentifier)
-        XCTAssertEqual(ids.effectiveGID, conn.effectiveGroupIdentifier)
-        XCTAssertEqual(ids.auditSessionID, conn.auditSessionIdentifier)
+        #expect(ids.pid == conn.processIdentifier)
+        #expect(ids.effectiveUID == conn.effectiveUserIdentifier)
+        #expect(ids.effectiveGID == conn.effectiveGroupIdentifier)
+        #expect(ids.auditSessionID == conn.auditSessionIdentifier)
     }
 
-    func testCodeSignatureVerification() async throws {
-        let goodConn = try self.openConnection(codeSigningRequirement: self.helperLauncher!.codeSigningRequirement)
+    @Test func `Code signature verification`() async throws {
+        let goodConn = try self.openConnection(codeSigningRequirement: self.helperCodeSigningRequirement())
 
         let response: String = try await goodConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
-        XCTAssertEqual(response, "TESTING 1 2 3")
+        #expect(response == "TESTING 1 2 3")
 
         let badConn = try self.openConnection(codeSigningRequirement: "identifier \"com.apple.true\" and anchor apple")
-        let failsSignatureVerification = self.expectation(
-            description: "Fails to send message because of code signature mismatch"
-        )
 
-        do {
+        let verificationError = await #expect(throws: XPCError.self) {
             try await badConn.sendMessage(name: CommandSet.capitalizeString, request: "Testing 1 2 3")
-        } catch let error as XPCError {
-            if case .unknown(let errorDesc) = error, errorDesc == "Peer Forbidden" {
-                failsSignatureVerification.fulfill()
-            } else {
-                throw error
-            }
         }
+        #expect(verificationError?.unknownDescription == "Peer Forbidden")
 
-        let failsConnectionInitialization = self.expectation(
-            description: "Fails to initialize connection because of bad code signing requirement"
-        )
-
-        do {
+        let requirementError = #expect(throws: XPCError.self) {
             _ = try self.openConnection(codeSigningRequirement: "")
-        } catch XPCError.invalidCodeSignatureRequirement {
-            failsConnectionInitialization.fulfill()
         }
-
-        await fulfillment(of: [failsSignatureVerification, failsConnectionInitialization], timeout: 10.0)
+        #expect(requirementError?.isInvalidCodeSignatureRequirement == true)
     }
 
-    func testSimpleRequestAndResponse() async throws {
+    @Test func `Simple request and response`() async throws {
         let conn = try self.openConnection()
 
         let stringResponse: String = try await conn.sendMessage(name: CommandSet.capitalizeString, request: "hi there")
-        XCTAssertEqual(stringResponse, "HI THERE")
+        #expect(stringResponse == "HI THERE")
 
         let doubleResponse: Double = try await conn.sendMessage(name: CommandSet.multiplyBy5, request: 3.7)
-        XCTAssertEqual(doubleResponse, 18.5, accuracy: 0.001)
+        #expect(abs(doubleResponse - 18.5) <= 0.001)
     }
 
-    func testDataTransport() async throws {
+    @Test func `Data transport`() async throws {
         let conn = try self.openConnection()
 
         let dataInfo: DataInfo = try await conn.sendMessage(
@@ -81,153 +60,135 @@ final class SwiftyXPCTests: XCTestCase {
             request: "One to beam up".data(using: .utf8)!
         )
 
-        XCTAssertEqual(String(data: dataInfo.characterName, encoding: .utf8), "Lt. Cmdr. Data")
-        XCTAssertEqual(String(data: dataInfo.playedBy, encoding: .utf8), "Brent Spiner")
-        XCTAssertEqual(
-            dataInfo.otherCharacters.map { String(data: $0, encoding: .utf8) },
-            ["Lore", "B4", "Noonien Soong", "Arik Soong", "Altan Soong", "Adam Soong"]
+        #expect(String(data: dataInfo.characterName, encoding: .utf8) == "Lt. Cmdr. Data")
+        #expect(String(data: dataInfo.playedBy, encoding: .utf8) == "Brent Spiner")
+        #expect(
+            dataInfo.otherCharacters.map { String(data: $0, encoding: .utf8) }
+                == ["Lore", "B4", "Noonien Soong", "Arik Soong", "Altan Soong", "Adam Soong"]
         )
 
         XPCErrorRegistry.shared.registerDomain(forErrorType: DataInfo.DataError.self)
-        let failsToSendBadData = self.expectation(description: "Fails to send bad data")
 
-        do {
+        let dataError = await #expect(throws: DataInfo.DataError.self) {
             try await conn.sendMessage(name: CommandSet.transportData, request: "It's Lore being sneaky".data(using: .utf8)!)
-        } catch let error as DataInfo.DataError {
-            XCTAssertEqual(error.failureReason, "fluctuation in the positronic matrix")
-            failsToSendBadData.fulfill()
         }
-
-        await fulfillment(of: [failsToSendBadData], timeout: 10.0)
+        #expect(dataError?.failureReason == "fluctuation in the positronic matrix")
     }
 
-    func testTwoWayCommunication() async throws {
+    @Test func `Two-way communication`() async throws {
         let conn = try self.openConnection()
 
         let listener = try XPCListener(type: .anonymous, codeSigningRequirement: nil)
 
-        let asksForJoke = self.expectation(description: "We will get asked for a joke")
-        let saysWhosThere = self.expectation(description: "The task will ask who's there")
-        let asksWho = self.expectation(description: "The task will respond to our query and add 'who?'")
-        let groans = self.expectation(description: "The task will not appreciate the joke")
-        let expectations = [asksForJoke, saysWhosThere, asksWho, groans]
-        expectations.forEach { $0.assertForOverFulfill = true }
+        let events = Recorder<String>()
+        let errors = Recorder<String>()
 
-        listener.setMessageHandler(name: JokeMessage.askForJoke) { _, response in
-            XCTAssertEqual(response, "Tell me a joke")
-            asksForJoke.fulfill()
+        listener.setMessageHandler(name: JokeMessage.askForJoke) { (_, request: String) -> String in
+            #expect(request == "Tell me a joke")
+            events.record(JokeMessage.askForJoke)
             return "Knock knock"
         }
 
-        listener.setMessageHandler(name: JokeMessage.whosThere) { _, response in
-            XCTAssertEqual(response, "Who's there?")
-            saysWhosThere.fulfill()
+        listener.setMessageHandler(name: JokeMessage.whosThere) { (_, request: String) -> String in
+            #expect(request == "Who's there?")
+            events.record(JokeMessage.whosThere)
             return "Orange"
         }
 
-        listener.setMessageHandler(name: JokeMessage.who) { _, response in
-            XCTAssertEqual(response, "Orange who?")
-            asksWho.fulfill()
+        listener.setMessageHandler(name: JokeMessage.who) { (_, request: String) -> String in
+            #expect(request == "Orange who?")
+            events.record(JokeMessage.who)
             return "Orange you glad this example is so silly?"
         }
 
-        listener.setMessageHandler(name: JokeMessage.groan) { _, response in
-            XCTAssertEqual(response, "That was awful!")
-            groans.fulfill()
+        listener.setMessageHandler(name: JokeMessage.groan) { (_, request: String) in
+            #expect(request == "That was awful!")
+            events.record(JokeMessage.groan)
         }
 
         listener.errorHandler = { _, error in
-            if case .connectionInvalid = error as? XPCError {
+            if (error as? XPCError)?.isConnectionInvalid == true {
                 // connection can go down once we've received the last message
                 return
             }
 
-            DispatchQueue.main.async {
-                XCTFail(error.localizedDescription)
-            }
+            errors.record(String(describing: error))
         }
 
         listener.activate()
 
         try await conn.sendMessage(name: CommandSet.tellAJoke, request: listener.endpoint)
 
-        await self.fulfillment(of: expectations, timeout: 10.0, enforceOrder: true)
+        // The groan is a one-way message, so it can still be on its way when `tellAJoke` returns.
+        #expect(try await events.waitUntil(count: 4))
+        #expect(events.values == [JokeMessage.askForJoke, JokeMessage.whosThere, JokeMessage.who, JokeMessage.groan])
+        #expect(errors.values.isEmpty)
     }
 
-    func testTwoWayCommunicationWithError() async throws {
+    @Test func `Two-way communication with error`() async throws {
         XPCErrorRegistry.shared.registerDomain(forErrorType: JokeMessage.NotAKnockKnockJoke.self)
         let conn = try self.openConnection()
 
         let listener = try XPCListener(type: .anonymous, codeSigningRequirement: nil)
+        let errors = Recorder<String>()
 
-        listener.setMessageHandler(name: JokeMessage.askForJoke) { _, response in
-            XCTAssertEqual(response, "Tell me a joke")
+        listener.setMessageHandler(name: JokeMessage.askForJoke) { (_, request: String) -> String in
+            #expect(request == "Tell me a joke")
             return "A `foo` walks into a `bar`"
         }
 
         listener.errorHandler = { _, error in
-            if case .connectionInvalid = error as? XPCError {
+            if (error as? XPCError)?.isConnectionInvalid == true {
                 // connection can go down once we've received the last message
                 return
             }
 
-            DispatchQueue.main.async {
-                XCTFail(error.localizedDescription)
-            }
+            errors.record(String(describing: error))
         }
 
         listener.activate()
 
-        let failsToSendInvalidJoke = self.expectation(description: "Fails to send non-knock-knock joke")
-
-        do {
+        let jokeError = await #expect(throws: JokeMessage.NotAKnockKnockJoke.self) {
             try await conn.sendMessage(name: CommandSet.tellAJoke, request: listener.endpoint)
-        } catch let error as JokeMessage.NotAKnockKnockJoke {
-            XCTAssertEqual(error.complaint, "That was not a knock knock joke!")
-            failsToSendInvalidJoke.fulfill()
         }
-
-        await fulfillment(of: [failsToSendInvalidJoke], timeout: 10.0)
+        #expect(jokeError?.complaint == "That was not a knock knock joke!")
+        #expect(errors.values.isEmpty)
     }
 
-    func testOnewayVsTwoWay() async throws {
+    @Test func `One-way vs two-way`() async throws {
         let conn = try self.openConnection()
 
         var date = Date.now
         try await conn.sendMessage(name: CommandSet.pauseOneSecond)
-        XCTAssertGreaterThanOrEqual(Date.now.timeIntervalSince(date), 1.0)
+        #expect(Date.now.timeIntervalSince(date) >= 1.0)
 
         date = Date.now
         try conn.sendOnewayMessage(name: CommandSet.pauseOneSecond, message: XPCNull())
-        XCTAssertLessThan(Date.now.timeIntervalSince(date), 0.5)
+        #expect(Date.now.timeIntervalSince(date) < 0.5)
     }
 
-    func testCancelConnection() async throws {
+    @Test func `Cancel connection`() async throws {
         let conn = try self.openConnection()
 
         let response: String = try await conn.sendMessage(name: CommandSet.capitalizeString, request: "will work")
-        XCTAssertEqual(response, "WILL WORK")
+        #expect(response == "WILL WORK")
 
         conn.cancel()
 
-        let err: Error?
-        do {
+        let cancellationError = await #expect(throws: XPCError.self) {
             _ = try await conn.sendMessage(name: CommandSet.capitalizeString, request: "won't work") as String
-            err = nil
-        } catch {
-            err = error
         }
+        #expect(cancellationError?.isConnectionInvalid == true)
+    }
 
-        guard case .connectionInvalid = err as? XPCError else {
-            XCTFail("Sending message to cancelled connection should throw XPCError.connectionInvalid")
-            return
-        }
+    private func helperCodeSigningRequirement() throws -> String {
+        try #require(LaunchedTestHelper.current).codeSigningRequirement
     }
 
     private func openConnection(codeSigningRequirement: String? = nil) throws -> XPCConnection {
         let conn = try XPCConnection(
             type: .remoteMachService(serviceName: helperID, isPrivilegedHelperTool: false),
-            codeSigningRequirement: codeSigningRequirement ?? self.helperLauncher?.codeSigningRequirement
+            codeSigningRequirement: codeSigningRequirement ?? self.helperCodeSigningRequirement()
         )
         conn.activate()
 
