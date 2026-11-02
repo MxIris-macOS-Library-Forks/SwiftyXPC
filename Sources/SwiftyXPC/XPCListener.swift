@@ -16,7 +16,9 @@ import os
 ///
 /// Create an `XPCListener` via `init(type:codeSigningRequirement:)`.
 ///
-/// Use the `setMessageHandler` family of functions to set up handler functions to receive messages.
+/// Use the `setMessageHandler` family of functions to set up handler functions to receive messages. A handler reaches every
+/// connection the listener accepts, including the ones it accepted before the handler was set: a connection looks its handlers
+/// up in the listener when a message arrives. A handler a connection sets on itself answers before the listener's.
 ///
 /// A listener must receive `.activate()` before it can receive any messages.
 public final class XPCListener {
@@ -58,13 +60,15 @@ public final class XPCListener {
     }
     private static let xpcMainListenerStorage = XPCMainListenerStorage()
 
-    private var _messageHandlers: [String: XPCConnection.MessageHandler] = [:]
-    private var messageHandlers: [String: XPCConnection.MessageHandler] {
+    private let _messageHandlerTable = MessageHandlerTable()
+
+    /// The table every connection this listener accepts consults when a message arrives.
+    private var messageHandlerTable: MessageHandlerTable {
         if case .connection(let connection, let isMulti) = self.backing, !isMulti {
-            return connection.messageHandlers
+            return connection.messageHandlerTable
         }
 
-        return self._messageHandlers
+        return self._messageHandlerTable
     }
 
     /// Set a message handler for an incoming message, identified by the `name` parameter, without taking any arguments or returning any value.
@@ -146,7 +150,7 @@ public final class XPCListener {
             return
         }
 
-        self._messageHandlers[name] = XPCConnection.MessageHandler(closure: handler)
+        self._messageHandlerTable[name] = XPCConnection.MessageHandler(closure: handler)
     }
 
     private let _codeSigningRequirement: String?
@@ -229,7 +233,7 @@ public final class XPCListener {
                 do {
                     let newConnection = try XPCConnection(connection: event, codeSigningRequirement: requirement)
 
-                    newConnection.messageHandlers = self?.messageHandlers ?? [:]
+                    newConnection.listenerMessageHandlerTable = self?.messageHandlerTable
                     newConnection.errorHandler = self?.errorHandler
 
                     newConnection.activate()
@@ -270,7 +274,7 @@ public final class XPCListener {
                         codeSigningRequirement: xpcMainListener._codeSigningRequirement
                     )
 
-                    connection.messageHandlers = xpcMainListener._messageHandlers
+                    connection.listenerMessageHandlerTable = xpcMainListener._messageHandlerTable
                     connection.errorHandler = xpcMainListener._errorHandler
 
                     connection.activate()

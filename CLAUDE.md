@@ -55,11 +55,14 @@ The type-erased handler storage is `XPCConnection.MessageHandler`, which capture
 
 `XPCListener.Backing` is a private enum with three cases driven by `ListenerType`:
 
-1. `.service` → `.xpcMain`. Calls `xpc_main`. Cannot be cancelled/suspended/resumed (all are `fatalError`). Stores itself in a global (`xpcMainListenerStorage`) because `xpc_main` takes a C function pointer with no context. Message handlers are copied into each incoming `XPCConnection`.
-2. `.machService(name:)` → `.connection(..., isMulti: true)`. Uses `XPC_CONNECTION_MACH_SERVICE_LISTENER`. Each incoming peer becomes a new `XPCConnection` wired with copies of the listener's handlers.
-3. `.anonymous` → `.connection(..., isMulti: false)`. The listener *is* the single connection; handlers are stored directly on that connection, not on the listener's `_messageHandlers` dictionary.
+1. `.service` → `.xpcMain`. Calls `xpc_main`. Cannot be cancelled/suspended/resumed (all are `fatalError`). Stores itself in a global (`xpcMainListenerStorage`) because `xpc_main` takes a C function pointer with no context. Each incoming `XPCConnection` keeps a reference to the listener's `MessageHandlerTable`.
+2. `.machService(name:)` → `.connection(..., isMulti: true)`. Uses `XPC_CONNECTION_MACH_SERVICE_LISTENER`. Each incoming peer becomes a new `XPCConnection` wired to the listener's `MessageHandlerTable`.
+3. `.anonymous` → `.connection(..., isMulti: false)`. The listener *is* the single connection; handlers are stored directly on that connection's table, not in the listener's `_messageHandlerTable`.
 
-The `isMulti` flag determines whether `setMessageHandler` on the listener writes to `_messageHandlers` (case 1, 2) or forwards to `connection.messageHandlers` (case 3). Getters for `messageHandlers`/`errorHandler` do the same routing. Any new listener-level state must preserve this split.
+The `isMulti` flag determines whether `setMessageHandler` on the listener writes to `_messageHandlerTable` (case 1, 2) or forwards to `connection.messageHandlerTable` (case 3). Getters for `messageHandlerTable`/`errorHandler` do the same routing. Any new listener-level state must preserve this split.
+
+Handlers are looked up when a message arrives, not copied when a connection is accepted: a connection asks its own `messageHandlerTable` first (handlers set on that connection), then `listenerMessageHandlerTable` (the listener's, shared by reference). So a handler the listener gains or replaces after accepting a connection reaches that connection too — a service can install handlers after `xpc_main` started, for instance once the first message told it what to serve. `MessageHandlerTable` is a class with an `os_unfair_lock` because those writes race the connections' lookups.
+
 
 ### Code-signing verification has two code paths
 

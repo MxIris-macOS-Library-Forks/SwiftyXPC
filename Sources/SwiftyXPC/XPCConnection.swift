@@ -135,7 +135,14 @@ public class XPCConnection: @unchecked Sendable {
         xpc_connection_set_event_handler(self.connection, self.handleEvent)
     }
 
-    internal var messageHandlers: [String: MessageHandler] = [:]
+    /// The handlers this connection answers with, set through its own `setMessageHandler` family.
+    internal let messageHandlerTable = MessageHandlerTable()
+
+    /// The table of the listener that accepted this connection, if one did.
+    ///
+    /// Asked, when a message arrives, for every name this connection has no handler of its own for — so a handler
+    /// the listener gains after accepting the connection still reaches it.
+    internal var listenerMessageHandlerTable: MessageHandlerTable? = nil
 
     /// A handler that will be called if a communication error occurs.
     public var errorHandler: ErrorHandler? = nil
@@ -143,7 +150,7 @@ public class XPCConnection: @unchecked Sendable {
     internal var customEventHandler: xpc_handler_t? = nil
 
     internal func getMessageHandler(forName name: String) -> MessageHandler.RawHandler? {
-        self.messageHandlers[name]?.closure
+        (self.messageHandlerTable[name] ?? self.listenerMessageHandlerTable?[name])?.closure
     }
 
     /// Set a message handler for an incoming message, identified by the `name` parameter, without taking any arguments or returning any value.
@@ -220,7 +227,7 @@ public class XPCConnection: @unchecked Sendable {
         name: String,
         handler: @escaping (XPCConnection, Request) async throws -> Response
     ) {
-        self.messageHandlers[name] = MessageHandler(closure: handler)
+        self.messageHandlerTable[name] = MessageHandler(closure: handler)
     }
 
     #if os(macOS)
