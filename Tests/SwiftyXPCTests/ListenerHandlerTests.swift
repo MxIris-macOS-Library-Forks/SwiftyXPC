@@ -107,5 +107,30 @@ final class ListenerHandlerTests: XCTestCase {
         XCTAssertEqual(after, "connection")
     }
 
+    /// An instance of a service the bundle does not embed fails like any missing service.
+    ///
+    /// A test bundle embeds no XPC service, so this only proves the instance
+    /// is set up without trapping. Starting real instances needs an app that
+    /// embeds a `_MultipleInstances` service.
+    func testServiceInstanceConnectionToAMissingServiceIsInvalid() async throws {
+        let connection = try XPCConnection(
+            type: .remoteServiceInstance(
+                bundleID: "com.charlessoft.SwiftyXPC.Tests.MissingService",
+                instance: UUID().uuid
+            )
+        )
+        connection.errorHandler = { _, _ in }
+        connection.activate()
+        defer { connection.cancel() }
+
+        do {
+            _ = try await self.send(connection, name: "anything", request: "")
+            XCTFail("A connection to a service the bundle does not embed answered")
+        } catch let error as XPCError {
+            guard case .connectionInvalid = error else {
+                return XCTFail("Expected connectionInvalid, got \(error)")
+            }
+        }
+    }
 }
 #endif

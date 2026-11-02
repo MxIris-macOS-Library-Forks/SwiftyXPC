@@ -14,6 +14,16 @@ private func swiftyxpc_xpc_connection_get_audit_token(
     _ token: UnsafeMutablePointer<audit_token_t>
 )
 
+// `xpc_connection_set_oneshot_instance` is an unpublished SPI exported from libxpc. Called on a
+// connection to an embedded XPC service before the connection is activated, it gives the connection
+// an instance of the service of its own: launchd starts a new process for the instance identifier,
+// and never relaunches it once it exits. WebKit starts its web content processes this way.
+@_silgen_name("xpc_connection_set_oneshot_instance")
+private func swiftyxpc_xpc_connection_set_oneshot_instance(
+    _ connection: xpc_connection_t,
+    _ instance: UnsafePointer<UInt8>
+)
+
 /// A bidirectional communication channel between two processes.
 ///
 /// Use this class’s `init(type:codeSigningRequirement:)` initializer to connect to an `XPCListener` instance in another process.
@@ -46,6 +56,13 @@ public class XPCConnection: @unchecked Sendable {
     public enum ConnectionType {
         /// Connect to an embedded XPC service inside the current application’s bundle. Pass the XPC service’s bundle ID as the `bundleID` parameter.
         case remoteService(bundleID: String)
+        /// Connect to an instance of an embedded XPC service that is this connection’s own process. Pass the XPC service’s bundle ID as the
+        /// `bundleID` parameter, and a new identifier for every connection as the `instance` parameter.
+        ///
+        /// The service’s `Info.plist` must set `_MultipleInstances` to `true` in its `XPCService` dictionary. launchd starts the instance when the
+        /// connection sends its first message. Once the instance exits, the connection reports `XPCError.connectionInterrupted` and then
+        /// `XPCError.connectionInvalid`, and the instance is never relaunched: connect again with a new identifier to start another.
+        case remoteServiceInstance(bundleID: String, instance: uuid_t)
         /// Create a connection from a passed-in endpoint, which typically will come embedded in an XPC message.
         case remoteServiceFromEndpoint(XPCEndpoint)
         /// Connect to a remote Mach service by its service name.
@@ -100,6 +117,13 @@ public class XPCConnection: @unchecked Sendable {
         switch type {
         case .remoteService(let bundleID):
             try self.init(connection: xpc_connection_create(bundleID, nil), codeSigningRequirement: requirement)
+        case .remoteServiceInstance(let bundleID, let instance):
+            let connection = xpc_connection_create(bundleID, nil)
+            withUnsafeBytes(of: instance) { instanceBytes in
+                let instancePointer = instanceBytes.bindMemory(to: UInt8.self).baseAddress!
+                swiftyxpc_xpc_connection_set_oneshot_instance(connection, instancePointer)
+            }
+            try self.init(connection: connection, codeSigningRequirement: requirement)
         case .remoteServiceFromEndpoint(let endpoint):
             try self.init(connection: endpoint.makeConnection(), codeSigningRequirement: requirement)
         case .remoteMachService(serviceName: let name, isPrivilegedHelperTool: let isPrivileged):

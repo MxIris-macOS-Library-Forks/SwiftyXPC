@@ -63,6 +63,9 @@ The `isMulti` flag determines whether `setMessageHandler` on the listener writes
 
 Handlers are looked up when a message arrives, not copied when a connection is accepted: a connection asks its own `messageHandlerTable` first (handlers set on that connection), then `listenerMessageHandlerTable` (the listener's, shared by reference). So a handler the listener gains or replaces after accepting a connection reaches that connection too — a service can install handlers after `xpc_main` started, for instance once the first message told it what to serve. `MessageHandlerTable` is a class with an `os_unfair_lock` because those writes race the connections' lookups.
 
+### Instances of an embedded service
+
+`ConnectionType.remoteServiceInstance(bundleID:instance:)` calls the unpublished `xpc_connection_set_oneshot_instance` (declared with `@_silgen_name`, like `xpc_connection_get_audit_token`) before the connection is activated. The service must set `_MultipleInstances` in its `Info.plist`'s `XPCService` dictionary; each identifier gets a process of its own, started on the first message and never relaunched — after the instance exits the connection reports `connectionInterrupted`, then `connectionInvalid`. Per-instance data does not travel in `xpc_connection_set_bootstrap` reliably (launchd hands every instance whatever bootstrap was set last), so send it in the first message. Only an app that embeds such a service can start real instances; the test target only checks that a connection to a missing service fails as invalid.
 
 ### Code-signing verification has two code paths
 
